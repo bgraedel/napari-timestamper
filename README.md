@@ -8,6 +8,7 @@
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-timestamper)](https://napari-hub.org/plugins/napari-timestamper)
 
 A simple plugin to add a timestamp overlay to napari
+uses some private overlay functionality, so may break in the future
 
 ----------------------------------
 
@@ -23,7 +24,7 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
-You can install `napari-timestamper` via [pip]:
+You can install `napari-timestamper` via [pip]: [not yet on PyPI]
 
     pip install napari-timestamper
 

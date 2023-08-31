@@ -1,36 +1,67 @@
-import numpy as np
+import pytest
+from qtpy import QtCore
 
-from napari_timestamper import ExampleQWidget, example_magic_widget
+from napari_timestamper._widget import TimestampWidget
 
 
-# make_napari_viewer is a pytest fixture that returns a napari viewer object
-# capsys is a pytest fixture that captures stdout and stderr output streams
-def test_example_q_widget(make_napari_viewer, capsys):
-    # make viewer and add an image layer using our fixture
+@pytest.fixture
+def timestamp_options(make_napari_viewer, qtbot):
     viewer = make_napari_viewer()
-    viewer.add_image(np.random.random((100, 100)))
-
-    # create our widget, passing in the viewer
-    my_widget = ExampleQWidget(viewer)
-
-    # call our widget method
-    my_widget._on_click()
-
-    # read captured output and check that it's as we expected
-    captured = capsys.readouterr()
-    assert captured.out == "napari has 1 layers\n"
+    widget = TimestampWidget(viewer)
+    viewer.window.add_dock_widget(widget)
+    return widget
 
 
-def test_example_magic_widget(make_napari_viewer, capsys):
-    viewer = make_napari_viewer()
-    layer = viewer.add_image(np.random.random((100, 100)))
+def test_initial_values(timestamp_options):
+    assert timestamp_options.time_axis.value() == 0
+    assert timestamp_options.start_time.value() == 0
+    assert timestamp_options.step_time.value() == 1
+    assert timestamp_options.prefix.text() == "T ="
+    assert timestamp_options.suffix.text() == "frame"
+    assert timestamp_options.position.currentText() == "top_center"
+    assert timestamp_options.ts_size.value() == 12
+    assert timestamp_options.x_shift.value() == 0
+    assert timestamp_options.y_shift.value() == 0
+    assert timestamp_options.time_format.currentText() == "HH:MM:SS"
 
-    # this time, our widget will be a MagicFactory or FunctionGui instance
-    my_widget = example_magic_widget()
 
-    # if we "call" this object, it'll execute our function
-    my_widget(viewer.layers[0])
+def test_set_color(timestamp_options, qtbot):
+    assert timestamp_options.chosen_color == "white"
+    qtbot.mouseClick(timestamp_options.color, QtCore.Qt.LeftButton)
+    timestamp_options.color_dialog.done(1)
+    assert timestamp_options.chosen_color != "white"
 
-    # read captured output and check that it's as we expected
-    captured = capsys.readouterr()
-    assert captured.out == f"you have selected {layer}\n"
+
+def test_set_timestamp_overlay_options(timestamp_options):
+    timestamp_options.time_axis.setValue(1)
+    timestamp_options.start_time.setValue(10)
+    timestamp_options.step_time.setValue(2)
+    timestamp_options.prefix.setText("Time =")
+    timestamp_options.suffix.setText("s")
+    timestamp_options.position.setCurrentIndex(2)
+    timestamp_options.ts_size.setValue(20)
+    timestamp_options.x_shift.setValue(5)
+    timestamp_options.y_shift.setValue(-5)
+    timestamp_options.time_format.setCurrentIndex(1)
+
+    timestamp_options._set_timestamp_overlay_options()
+
+    assert timestamp_options.viewer._overlays["timestamp"].time_axis == 1
+    assert timestamp_options.viewer._overlays["timestamp"].start_time == 10
+    assert timestamp_options.viewer._overlays["timestamp"].step_size == 2
+    assert timestamp_options.viewer._overlays["timestamp"].prefix == "Time ="
+    assert timestamp_options.viewer._overlays["timestamp"].suffix == "s"
+    assert (
+        timestamp_options.viewer._overlays["timestamp"].position == "top_right"
+    )
+    assert timestamp_options.viewer._overlays["timestamp"].size == 20
+    assert (
+        timestamp_options.viewer._overlays["timestamp"].x_position_offset == 5
+    )
+    assert (
+        timestamp_options.viewer._overlays["timestamp"].y_position_offset == -5
+    )
+    assert (
+        timestamp_options.viewer._overlays["timestamp"].time_format
+        == "HH:MM:SS.ss"
+    )

@@ -2,20 +2,9 @@ name: napari-timestamper
 display_name: Timestamper
 contributions:
   commands:
-    - id: napari-timestamper.make_qwidget
-      python_name: napari_timestamper._widget:ExampleQWidget
-      title: Make example QWidget
-    - id: napari-timestamper.make_magic_widget
-      python_name: napari_timestamper._widget:example_magic_widget
-      title: Make example magic widget
-    - id: napari-timestamper.make_func_widget
-      python_name: napari_timestamper._widget:example_function_widget
-      title: Make example function widget
+    - id: napari-timestamper.timestamper
+      python_name: napari_timestamper._widget:TimestampWidget
+      title: Make Timestamp Widget
   widgets:
-    - command: napari-timestamper.make_qwidget
-      display_name: Example QWidget
-    - command: napari-timestamper.make_magic_widget
-      display_name: Example Magic Widget
-    - command: napari-timestamper.make_func_widget
-      autogenerate: true
-      display_name: Example Function Widget
+    - command: napari-timestamper.timestamper
+      display_name: Timestamper
