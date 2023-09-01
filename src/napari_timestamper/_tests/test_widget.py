@@ -16,8 +16,8 @@ def test_initial_values(timestamp_options):
     assert timestamp_options.time_axis.value() == 0
     assert timestamp_options.start_time.value() == 0
     assert timestamp_options.step_time.value() == 1
-    assert timestamp_options.prefix.text() == "T ="
-    assert timestamp_options.suffix.text() == "frame"
+    assert timestamp_options.prefix.text() == ""
+    assert timestamp_options.suffix.text() == "HH:MM:SS"
     assert timestamp_options.position.currentText() == "top_center"
     assert timestamp_options.ts_size.value() == 12
     assert timestamp_options.x_shift.value() == 0

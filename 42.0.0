@@ -1,0 +1,12 @@
+Requirement already satisfied: setuptools in c:\users\benig\documents\python_dev\napari-timestamper\.tox\.package\lib\site-packages (68.1.2)
+Requirement already satisfied: wheel in c:\users\benig\documents\python_dev\napari-timestamper\.tox\.package\lib\site-packages (0.41.2)
+Collecting setuptools_scm
+  Using cached setuptools_scm-7.1.0-py3-none-any.whl (43 kB)
+Collecting packaging>=20.0 (from setuptools_scm)
+  Using cached packaging-23.1-py3-none-any.whl (48 kB)
+Collecting typing-extensions (from setuptools_scm)
+  Obtaining dependency information for typing-extensions from https://files.pythonhosted.org/packages/ec/6b/63cc3df74987c36fe26157ee12e09e8f9db4de771e0f3404263117e75b95/typing_extensions-4.7.1-py3-none-any.whl.metadata
+  Using cached typing_extensions-4.7.1-py3-none-any.whl.metadata (3.1 kB)
+Using cached typing_extensions-4.7.1-py3-none-any.whl (33 kB)
+Installing collected packages: typing-extensions, packaging, setuptools_scm
+Successfully installed packaging-23.1 setuptools_scm-7.1.0 typing-extensions-4.7.1

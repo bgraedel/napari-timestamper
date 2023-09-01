@@ -1,9 +1,12 @@
 """
 This module contains the TimestampOverlay class and the VispyTimestampOverlay class.
 
-The TimestampOverlay class is a canvas overlay that displays a timestamp on a napari viewer. It has several customizable properties such as color, size, prefix, suffix, time, start_time, step_size, time_format, y_position_offset, x_position_offset, and time_axis.
+The TimestampOverlay class is a canvas overlay that displays a timestamp on a napari viewer.
+It has several customizable properties such as color, size, prefix, suffix, time, start_time, step_size,
+time_format, y_position_offset, x_position_offset, and time_axis.
 
-The VispyTimestampOverlay class is a vispy canvas overlay that displays the TimestampOverlay on a napari viewer. It inherits from the ViewerOverlayMixin and VispyCanvasOverlay classes.
+The VispyTimestampOverlay class is a vispy canvas overlay that displays the TimestampOverlay on a napari viewer.
+It inherits from the ViewerOverlayMixin and VispyCanvasOverlay classes.
 
 This structure is adapted from the napari dev example.
 """
@@ -21,32 +24,7 @@ if TYPE_CHECKING:
 
 class TimestampOverlay(CanvasOverlay):
     """
-    A class representing a timestamp overlay on a napari viewer canvas.
-
-    Parameters
-    ----------
-    color : tuple of float
-        The color of the timestamp text in RGBA format.
-    size : int
-        The font size of the timestamp text.
-    prefix : str
-        The prefix string to be added before the timestamp text.
-    suffix : str
-        The suffix string to be added after the timestamp text.
-    time : int
-        The current time in seconds.
-    start_time : int
-        The start time in seconds.
-    step_size : float
-        The step size in seconds.
-    time_format : str
-        The format specifier for the timestamp text.
-    y_position_offset : int
-        The y-axis offset of the timestamp text.
-    x_position_offset : int
-        The x-axis offset of the timestamp text.
-    time_axis : int
-        The time axis of the viewer.
+    Timestamp Overlay.
     """
 
     color: ColorValue = (0, 1, 0, 1)
@@ -103,7 +81,7 @@ class TimestampOverlay(CanvasOverlay):
         elif format_specifier == "H:M:S.ss":
             return f"{hours}:{minutes}:{seconds:.2f}"
         elif format_specifier == "MM:SS":
-            return f"{minutes:02}:{seconds:02}"
+            return f"{minutes:02}:{seconds:02.0f}"
         elif format_specifier == "MM:SS.ss":
             return f"{minutes:02}:{seconds:05.2f}"
         elif format_specifier == "M:S":
@@ -111,9 +89,9 @@ class TimestampOverlay(CanvasOverlay):
         elif format_specifier == "M:S.ss":
             return f"{minutes}:{seconds:.2f}"
         elif format_specifier == "SS":
-            return f"{seconds:02.0f}"
+            return f"{total_time:02.0f}"
         elif format_specifier == "SS.ss":
-            return f"{seconds:05.2f}"
+            return f"{total_time:05.2f}"
         elif format_specifier == "F":
             return f"{total_time:.0f}"
         else:
@@ -157,30 +135,7 @@ class TimestampOverlay(CanvasOverlay):
 
 class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
     """
-    A class representing a timestamp overlay for a napari viewer.
-
-    Parameters
-    ----------
-    viewer : napari.viewer.Viewer
-        The napari viewer to which the overlay will be added.
-    overlay : napari_timestamper.Overlay
-        The overlay object containing the text, color, size, and position of the timestamp.
-    parent : vispy.scene.Node, optional
-        The parent node of the overlay, by default None.
-
-    Attributes
-    ----------
-    node : vispy.scene.visuals.Text
-        The vispy text node representing the timestamp overlay.
-    viewer : napari.viewer.Viewer
-        The napari viewer to which the overlay is added.
-    overlay : napari_timestamper.Overlay
-        The overlay object containing the text, color, size, and position of the timestamp.
-
-    Methods
-    -------
-    reset()
-        Resets the overlay to its initial state.
+    Vispy Timestamp Overlay.
     """
 
     def __init__(self, *, viewer, overlay, parent=None):

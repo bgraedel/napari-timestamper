@@ -81,31 +81,39 @@ class TimestampWidget(QtWidgets.QWidget):
     def _setupUi(self):
         self.setObjectName("Timestamp Options")
         self.gridLayout = QtWidgets.QGridLayout()
+
         self.time_axis_label = QtWidgets.QLabel("Time Axis")
         self.time_axis = QtWidgets.QSpinBox()
         self.time_axis.setRange(-10, 10)
+
         self.start_time_label = QtWidgets.QLabel("Start Time")
         self.start_time = QtWidgets.QSpinBox()
         self.start_time.setRange(0, 10000)
         self.start_time.setValue(0)
+
         self.step_time_label = QtWidgets.QLabel("Step Time")
         self.step_time = QtWidgets.QDoubleSpinBox()
         self.step_time.setRange(0, 10000)
         self.step_time.setValue(1)
+
         self.prefix_label = QtWidgets.QLabel("Prefix")
         self.prefix = QtWidgets.QLineEdit()
-        self.prefix.setText("T =")
+        self.prefix.setText("")
+
         self.suffix_label = QtWidgets.QLabel("Suffix")
         self.suffix = QtWidgets.QLineEdit()
-        self.suffix.setText("frame")
+        self.suffix.setText("HH:MM:SS")
+
         self.position_label = QtWidgets.QLabel("Position")
         self.position = QtWidgets.QComboBox()
         self.position.addItems(CanvasPosition)
         self.position.setCurrentIndex(1)
+
         self.size_label = QtWidgets.QLabel("Size")
         self.ts_size = QtWidgets.QSpinBox()
         self.ts_size.setRange(0, 1000)
         self.ts_size.setValue(12)
+
         self.shift_label = QtWidgets.QLabel("XY Shift")
         self.shiftlayout = QtWidgets.QHBoxLayout()
         self.x_shift = QtWidgets.QSpinBox()
@@ -116,14 +124,18 @@ class TimestampWidget(QtWidgets.QWidget):
         self.y_shift.setValue(0)
         self.shiftlayout.addWidget(self.x_shift)
         self.shiftlayout.addWidget(self.y_shift)
+
         self.time_format_label = QtWidgets.QLabel("Time Format")
         self.time_format = QtWidgets.QComboBox()
         self.time_format.addItems(
             TimestampOverlay._get_allowed_format_specifiers()
         )
+
         self.color = QtWidgets.QPushButton("Choose Color")
         self.color_display = QtWidgets.QFrame()
+
         self.toggle_timestamp = QtWidgets.QPushButton("Add Timestamp")
+
         self.gridLayout.addWidget(self.time_axis_label, 0, 0)
         self.gridLayout.addWidget(self.time_axis, 0, 1)
         self.gridLayout.addWidget(self.start_time_label, 1, 0)
@@ -170,6 +182,7 @@ class TimestampWidget(QtWidgets.QWidget):
                 "QWidget {background-color: %s}" % color.name()
             )
             self.chosen_color = color.name()
+            self._set_timestamp_overlay_options()
 
     def _set_timestamp_overlay_options(self):
         with warnings.catch_warnings():

@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/napari-timestamper.svg?color=green)](https://python.org)
 [![tests](https://github.com/bgraedel/napari-timestamper/workflows/tests/badge.svg)](https://github.com/bgraedel/napari-timestamper/actions)
 [![codecov](https://codecov.io/gh/bgraedel/napari-timestamper/branch/main/graph/badge.svg)](https://codecov.io/gh/bgraedel/napari-timestamper)
-[![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-timestamper)](https://napari-hub.org/plugins/napari-timestamper)
+<!-- [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-timestamper)](https://napari-hub.org/plugins/napari-timestamper) -->
 
 A simple plugin to add a timestamp overlay to napari
 uses some private overlay functionality, so may break in the future
@@ -13,14 +13,6 @@ uses some private overlay functionality, so may break in the future
 ----------------------------------
 
 This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template.
-
-<!--
-Don't miss the full getting started guide to set up your new package:
-https://github.com/napari/cookiecutter-napari-plugin#getting-started
-
-and review the napari docs for plugin developers:
-https://napari.org/stable/plugins/index.html
--->
 
 ## Installation
 
