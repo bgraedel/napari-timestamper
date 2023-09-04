@@ -16,7 +16,7 @@ This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookie
 
 ## Installation
 
-You can install `napari-timestamper` via [pip]: [not yet on PyPI]
+You can install `napari-timestamper` via [pip]:
 
     pip install napari-timestamper
 
