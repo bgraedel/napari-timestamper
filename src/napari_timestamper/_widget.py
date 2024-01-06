@@ -8,8 +8,14 @@ import warnings
 import napari
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components._viewer_constants import CanvasPosition
-from qtpy import QtWidgets
+from qtpy import QtCore, QtGui, QtWidgets
+from superqt import QLabeledSlider
 
+from napari_timestamper._layer_annotator_overlay import (
+    LayerAnnotatorOverlay,
+    ScenePosition,
+    VispyLayerAnnotatorOverlay,
+)
 from napari_timestamper._timestamp_overlay import (
     TimestampOverlay,
     VispyTimestampOverlay,
@@ -218,3 +224,216 @@ class TimestampWidget(QtWidgets.QWidget):
 
         self.color.clicked.connect(self._open_color_dialog)
         self.color.clicked.connect(self._set_timestamp_overlay_options)
+
+
+class LayerAnnotationsWidget(QtWidgets.QWidget):
+    """
+    A widget that provides options for the layer annotator overlay in napari viewer.
+
+    Parameters
+    ----------
+    viewer : napari.Viewer
+        The napari viewer instance.
+    parent : QWidget, optional
+        The parent widget, by default None.
+    """
+
+    overlay_set: bool = False
+
+    def __init__(self, viewer: napari.viewer.Viewer, parent=None):
+        super().__init__(parent)
+        self.viewer = viewer
+        self.chosen_color = "grey"  # Default color
+        self._setupUi()
+        self._connect_all_changes()
+        self._setup_overlay()
+        self._set_layer_annotator_overlay_options()
+        self._on_color_combobox_change()
+
+    def _setup_overlay(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                self.viewer._overlays["LayerAnnotator"]
+            except KeyError:
+                self.viewer._overlays[
+                    "LayerAnnotator"
+                ] = LayerAnnotatorOverlay(visible=True)
+                overlay_to_visual[
+                    LayerAnnotatorOverlay
+                ] = VispyLayerAnnotatorOverlay
+                self.viewer.window._qt_viewer._add_overlay(
+                    self.viewer._overlays["LayerAnnotator"]
+                )
+            self.layer_annotator_overlay = self.viewer._overlays[
+                "LayerAnnotator"
+            ]
+            self._set_layer_annotator_overlay_options()
+            self.overlay_set = True
+
+    def _setupUi(self):
+        self.setObjectName("Layer Annotator Options")
+        self.gridLayout = QtWidgets.QGridLayout(self)
+
+        # Size Slider
+        self.size_label = QtWidgets.QLabel("Size")
+        self.size_slider = QLabeledSlider(QtCore.Qt.Horizontal)
+        self.size_slider.setRange(1, 100)
+        self.size_slider.setValue(12)
+
+        # Position Selector
+        self.position_label = QtWidgets.QLabel("Position")
+        self.position_combobox = QtWidgets.QComboBox()
+        self.position_combobox.addItems(ScenePosition)
+
+        # X and Y Position Offset
+        self.xy_offset_label = QtWidgets.QLabel("XY Position Offset")
+        self.x_offset_spinbox = QtWidgets.QSpinBox()
+        self.x_offset_spinbox.setRange(-1000, 1000)
+        self.x_offset_spinbox.setValue(5)
+        self.y_offset_spinbox = QtWidgets.QSpinBox()
+        self.y_offset_spinbox.setRange(-1000, 1000)
+        self.y_offset_spinbox.setValue(5)
+        self.offset_layout = QtWidgets.QHBoxLayout()
+        self.offset_layout.addWidget(self.x_offset_spinbox)
+        self.offset_layout.addWidget(self.y_offset_spinbox)
+
+        # Toggle Visibility Button
+        self.toggle_visibility_button = QtWidgets.QPushButton(
+            "Toggle Visibility"
+        )
+        self.toggle_visibility_button.setCheckable(True)
+        self.toggle_visibility_button.setChecked(True)
+
+        # Adding Widgets to Layout
+        self.gridLayout.addWidget(self.size_label, 0, 0)
+        self.gridLayout.addWidget(self.size_slider, 0, 1)
+
+        self.gridLayout.addWidget(self.position_label, 1, 0)
+        self.gridLayout.addWidget(self.position_combobox, 1, 1)
+
+        self.gridLayout.addWidget(self.xy_offset_label, 2, 0)
+        self.gridLayout.addLayout(self.offset_layout, 2, 1)
+
+        self.gridLayout.addWidget(self.toggle_visibility_button, 3, 0, 1, 2)
+
+        # Choose wether to use layer color or custom color by ticking the checkbox
+        self.color_checkbox = QtWidgets.QCheckBox("Use Layer Colormapr")
+        self.color_checkbox.setChecked(True)
+        self.gridLayout.addWidget(self.color_checkbox, 4, 0)
+
+        # Color Picker
+        self.color = QtWidgets.QPushButton("Choose Color")
+        self._update_color_button_icon(self.chosen_color)  # Update button icon
+
+        # Adding Color Picker to Layout
+        self.gridLayout.addWidget(self.color, 4, 1)
+
+        self.spacer = QtWidgets.QSpacerItem(
+            20,
+            40,
+            QtWidgets.QSizePolicy.Minimum,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.gridLayout.addItem(self.spacer, 5, 0, 1, 2)
+
+        # Set the layout to the widget
+        self.setLayout(self.gridLayout)
+
+        # Connect the toggle visibility button to its slot
+        self.size_slider.valueChanged.connect(self._on_size_slider_change)
+        self.toggle_visibility_button.clicked.connect(self._toggle_visibility)
+        self.color_checkbox.stateChanged.connect(
+            self._on_color_combobox_change
+        )
+
+    def _update_color_button_icon(self, color_str):
+        pixmap = QtGui.QPixmap(20, 20)  # Create a QPixmap of size 20x20
+        pixmap.fill(
+            QtGui.QColor(color_str)
+        )  # Fill the pixmap with the chosen color
+        icon = QtGui.QIcon(pixmap)  # Convert pixmap to QIcon
+        self.color.setIcon(icon)  # Set the icon for the button
+
+    def _on_color_combobox_change(self):
+        """
+        Slot function to handle changes in the color combobox.
+        """
+        if self.color_checkbox.isChecked():
+            self.color.setEnabled(False)
+            self._update_color_button_icon("grey")  # Update button icon
+            self.layer_annotator_overlay.use_layer_color = True
+
+        else:
+            self.color.setEnabled(True)
+            self._update_color_button_icon(self.chosen_color)
+            self.layer_annotator_overlay.use_layer_color = False
+
+        self._set_layer_annotator_overlay_options()
+
+    def _open_color_dialog(self):
+        self.color_dialog = QtWidgets.QColorDialog(parent=self)
+        self.color_dialog.open(self._set_colour)
+
+    def _set_colour(self):
+        color = self.color_dialog.selectedColor()
+        if color.isValid():
+            self.chosen_color = color.name()
+            self._update_color_button_icon(self.chosen_color)
+            self._set_layer_annotator_overlay_options()
+
+    def _toggle_visibility(self):
+        self.layer_annotator_overlay.visible = (
+            not self.layer_annotator_overlay.visible
+        )
+        self.toggle_visibility_button.setText(
+            "Hide Overlay"
+            if self.layer_annotator_overlay.visible
+            else "Show Overlay"
+        )
+
+    def _on_size_slider_change(self):
+        """
+        Slot function to handle changes in the size slider.
+        """
+        new_size = self.size_slider.value()
+        # Update the overlay size
+        if self.overlay_set:
+            self.layer_annotator_overlay.size = new_size
+
+    def _set_layer_annotator_overlay_options(self):
+        """
+        Set options for LayerAnnotatorOverlay based on the widget inputs.
+        """
+        if self.overlay_set:
+            print("Setting LayerAnnotatorOverlay options")
+            # Update the overlay properties
+            self.layer_annotator_overlay.position = (
+                self.position_combobox.currentText()
+            )
+            self.layer_annotator_overlay.x_spacer = (
+                self.x_offset_spinbox.value()
+            )
+            self.layer_annotator_overlay.y_spacer = (
+                self.y_offset_spinbox.value()
+            )
+            # get the color from the color picker
+            self.layer_annotator_overlay.color = (
+                self.chosen_color
+            )  # Set color for overlay
+
+    def _connect_all_changes(self):
+        """
+        Connects all the widget changes to their respective slots.
+        """
+        self.position_combobox.currentTextChanged.connect(
+            self._set_layer_annotator_overlay_options
+        )
+        self.x_offset_spinbox.valueChanged.connect(
+            self._set_layer_annotator_overlay_options
+        )
+        self.y_offset_spinbox.valueChanged.connect(
+            self._set_layer_annotator_overlay_options
+        )
+        self.color.clicked.connect(self._open_color_dialog)
+        self.color.clicked.connect(self._set_layer_annotator_overlay_options)

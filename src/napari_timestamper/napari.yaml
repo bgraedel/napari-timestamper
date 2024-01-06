@@ -5,6 +5,11 @@ contributions:
     - id: napari-timestamper.timestamper
       python_name: napari_timestamper._widget:TimestampWidget
       title: Make Timestamp Widget
+    - id: napari-timestamper.layer_annotations
+      python_name: napari_timestamper._widget:LayerAnnotationsWidget
+      title: Make Timestamp Widget
   widgets:
     - command: napari-timestamper.timestamper
       display_name: Timestamper
+    - command: napari-timestamper.layer_annotations
+      display_name: Layer Annotations
