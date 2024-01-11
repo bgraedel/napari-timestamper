@@ -10,26 +10,28 @@ It inherits from the ViewerOverlayMixin and VispyCanvasOverlay classes.
 
 This structure is adapted from the napari dev example.
 """
-from typing import TYPE_CHECKING
-
-from napari._vispy.overlays.base import ViewerOverlayMixin, VispySceneOverlay
-from napari.components.overlays import SceneOverlay
-
-try:
-    from napari.utils.compat import StrEnum
-except ImportError:
-    from enum import StrEnum
 import contextlib
 from collections import defaultdict
 from typing import Literal
 
 import numpy as np
+from napari._vispy.overlays.base import ViewerOverlayMixin, VispySceneOverlay
+from napari.components.overlays import SceneOverlay
 from vispy.color import ColorArray
 from vispy.scene.visuals import Text
 from vispy.visuals.transforms import STTransform
 
-if TYPE_CHECKING:
-    pass
+try:
+    from napari.utils.compat import StrEnum
+except ImportError:
+    import enum
+
+    class StrEnum(str, enum.Enum):
+        """Enum where members are also (and must be) strings"""
+
+        def _generate_next_value_(name, start, count, last_values):
+            """Generate an enum member."""
+            return name
 
 
 class ScenePosition(StrEnum):
@@ -316,3 +318,4 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self._on_size_change()
         self._on_position_change()
         self._on_viewer_zoom_change()
+        self._update_annotations()

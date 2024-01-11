@@ -406,7 +406,6 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         Set options for LayerAnnotatorOverlay based on the widget inputs.
         """
         if self.overlay_set:
-            print("Setting LayerAnnotatorOverlay options")
             # Update the overlay properties
             self.layer_annotator_overlay.position = (
                 self.position_combobox.currentText()
