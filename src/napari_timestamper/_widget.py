@@ -4,11 +4,24 @@ Dock widget for napari-timestamper
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import napari
 from napari._vispy.utils.visual import overlay_to_visual
 from napari.components._viewer_constants import CanvasPosition
 from qtpy import QtCore, QtGui, QtWidgets
+from qtpy.QtCore import Slot
+from qtpy.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 from superqt import QLabeledSlider
 
 from napari_timestamper._layer_annotator_overlay import (
@@ -20,6 +33,7 @@ from napari_timestamper._timestamp_overlay import (
     TimestampOverlay,
     VispyTimestampOverlay,
 )
+from napari_timestamper.render_as_rgb import render_as_rgb, save_image_stack
 
 
 class TimestampWidget(QtWidgets.QWidget):
@@ -108,7 +122,7 @@ class TimestampWidget(QtWidgets.QWidget):
 
         self.suffix_label = QtWidgets.QLabel("Suffix")
         self.suffix = QtWidgets.QLineEdit()
-        self.suffix.setText("HH:MM:SS")
+        self.suffix.setText("")
 
         self.position_label = QtWidgets.QLabel("Position")
         self.position = QtWidgets.QComboBox()
@@ -140,6 +154,12 @@ class TimestampWidget(QtWidgets.QWidget):
         self.color = QtWidgets.QPushButton("Choose Color")
         self.color_display = QtWidgets.QFrame()
 
+        self.display_on_scene = QtWidgets.QCheckBox("Display on Scene")
+        self.display_on_scene.setChecked(True)
+
+        self.scale_with_zoom = QtWidgets.QCheckBox("Scale with Zoom")
+        self.scale_with_zoom.setChecked(True)
+
         self.toggle_timestamp = QtWidgets.QPushButton("Add Timestamp")
 
         self.gridLayout.addWidget(self.time_axis_label, 0, 0)
@@ -162,7 +182,9 @@ class TimestampWidget(QtWidgets.QWidget):
         self.gridLayout.addWidget(self.time_format, 8, 1)
         self.gridLayout.addWidget(self.color, 9, 1)
         self.gridLayout.addWidget(self.color_display, 9, 0)
-        self.gridLayout.addWidget(self.toggle_timestamp, 10, 0, 1, 2)
+        self.gridLayout.addWidget(self.display_on_scene, 10, 1)
+        self.gridLayout.addWidget(self.scale_with_zoom, 10, 0)
+        self.gridLayout.addWidget(self.toggle_timestamp, 11, 0, 1, 2)
         self.setLayout(self.gridLayout)
 
         self.spacer = QtWidgets.QSpacerItem(
@@ -171,7 +193,7 @@ class TimestampWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Minimum,
             QtWidgets.QSizePolicy.Expanding,
         )
-        self.gridLayout.addItem(self.spacer, 11, 0, 1, 2)
+        self.gridLayout.addItem(self.spacer, 12, 0, 1, 2)
 
         self.color_display.setStyleSheet(
             "QWidget {background-color: %s}" % self.chosen_color
@@ -198,13 +220,17 @@ class TimestampWidget(QtWidgets.QWidget):
         timestamp_overlay.size = self.ts_size.value()
         timestamp_overlay.position = self.position.currentText()
         timestamp_overlay.prefix = self.prefix.text()
-        timestamp_overlay.suffix = self.suffix.text()
+        timestamp_overlay.custom_suffix = (
+            self.suffix.text() if self.suffix else None
+        )
         timestamp_overlay.start_time = self.start_time.value()
         timestamp_overlay.step_size = self.step_time.value()
         timestamp_overlay.time_format = self.time_format.currentText()
         timestamp_overlay.x_position_offset = self.x_shift.value()
         timestamp_overlay.y_position_offset = self.y_shift.value()
         timestamp_overlay.time_axis = self.time_axis.value()
+        timestamp_overlay.display_on_scene = self.display_on_scene.isChecked()
+        timestamp_overlay.scale_with_zoom = self.scale_with_zoom.isChecked()
 
     def _connect_all_changes(self):
         for i in [
@@ -224,6 +250,12 @@ class TimestampWidget(QtWidgets.QWidget):
 
         self.color.clicked.connect(self._open_color_dialog)
         self.color.clicked.connect(self._set_timestamp_overlay_options)
+        self.display_on_scene.stateChanged.connect(
+            self._set_timestamp_overlay_options
+        )
+        self.scale_with_zoom.stateChanged.connect(
+            self._set_timestamp_overlay_options
+        )
 
 
 class LayerAnnotationsWidget(QtWidgets.QWidget):
@@ -436,3 +468,118 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         )
         self.color.clicked.connect(self._open_color_dialog)
         self.color.clicked.connect(self._set_layer_annotator_overlay_options)
+
+
+class RenderRGBWidget(QWidget):
+    def __init__(self, viewer: napari.viewer.Viewer, parent=None):
+        super().__init__(parent)
+        self.viewer = viewer
+
+        self.layout = QVBoxLayout(self)
+
+        self.filepath_label = QLabel("Output Directory:", self)
+        self.layout.addWidget(self.filepath_label)
+
+        self.filepath_button = QPushButton("Select Directory", self)
+        self.layout.addWidget(self.filepath_button)
+
+        self.export_type_label = QLabel("Export Type:", self)
+        self.layout.addWidget(self.export_type_label)
+
+        self.export_type_combobox = QComboBox(self)
+        self.export_type_combobox.addItems(
+            ["mp4", "tif", "png", "jpeg", "gif"]
+        )
+        self.layout.addWidget(self.export_type_combobox)
+
+        self.axis_label = QLabel("Viewer Axis:", self)
+        self.layout.addWidget(self.axis_label)
+
+        self.axis_combobox = QComboBox(self)
+        self.axis_combobox.addItem("None", None)
+        self.layout.addWidget(self.axis_combobox)
+
+        self.name_label = QLabel("Name:", self)
+        self.layout.addWidget(self.name_label)
+
+        self.name_lineedit = QLineEdit(self)
+        self.name_lineedit.setText("output")
+        self.layout.addWidget(self.name_lineedit)
+
+        self.size_checkbox = QCheckBox("Export at specified size", self)
+        self.layout.addWidget(self.size_checkbox)
+
+        self.output_size_label = QLabel("Output Size:", self)
+        self.layout.addWidget(self.output_size_label)
+
+        self.output_size_layout = QtWidgets.QHBoxLayout()
+        self.y_size_spinbox = QSpinBox(self)
+        self.y_size_spinbox.setEnabled(False)
+        self.y_size_spinbox.setMaximum(10000)
+        self.y_size_spinbox.setValue(512)
+        self.output_size_layout.addWidget(self.y_size_spinbox)
+
+        self.x_size_spinbox = QSpinBox(self)
+        self.x_size_spinbox.setEnabled(False)
+        self.x_size_spinbox.setMaximum(10000)
+        self.x_size_spinbox.setValue(512)
+        self.output_size_layout.addWidget(self.x_size_spinbox)
+
+        self.layout.addLayout(self.output_size_layout)
+
+        self.render_button = QPushButton("Render and Save", self)
+        self.layout.addWidget(self.render_button)
+
+        self.spacer = QtWidgets.QSpacerItem(
+            20,
+            40,
+            QtWidgets.QSizePolicy.Minimum,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.layout.addItem(self.spacer)
+
+        self.directory = Path()
+
+        self.update_axis_combobox()
+        self.connect_slots()
+
+    def connect_slots(self):
+        self.viewer.layers.events.inserted.connect(self.update_axis_combobox)
+        self.viewer.layers.events.removed.connect(self.update_axis_combobox)
+        self.filepath_button.clicked.connect(self.on_filepath_button_clicked)
+        self.size_checkbox.toggled.connect(self.y_size_spinbox.setEnabled)
+        self.size_checkbox.toggled.connect(self.x_size_spinbox.setEnabled)
+        self.render_button.clicked.connect(self.on_render_button_clicked)
+
+    def update_axis_combobox(self):
+        self.axis_combobox.clear()
+        self.axis_combobox.addItem("None", None)
+        choices = []
+        for i, axis in enumerate(self.viewer.dims.axis_labels[:-2]):
+            if axis is not None:
+                choices.append(i)
+                self.axis_combobox.addItem(axis, i)
+
+    @Slot()
+    def on_filepath_button_clicked(self):
+        self.directory = Path(
+            QFileDialog.getExistingDirectory(self, "Select Directory")
+        )
+        self.filepath_label.setText(f"Output Directory: {self.directory}")
+
+    @Slot()
+    def on_render_button_clicked(self):
+        size = (
+            (self.y_size_spinbox.value(), self.x_size_spinbox.value())
+            if self.size_checkbox.isChecked()
+            else None
+        )
+        rendered_image = render_as_rgb(
+            self.viewer, self.axis_combobox.currentData(), size
+        )
+        save_image_stack(
+            rendered_image,
+            self.directory,
+            self.name_lineedit.text(),
+            self.export_type_combobox.currentText(),
+        )

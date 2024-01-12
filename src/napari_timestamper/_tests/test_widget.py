@@ -1,7 +1,7 @@
 import pytest
 from qtpy import QtCore
 
-from napari_timestamper._widget import TimestampWidget
+from napari_timestamper._widget import LayerAnnotationsWidget, TimestampWidget
 
 
 @pytest.fixture
@@ -12,12 +12,20 @@ def timestamp_options(make_napari_viewer, qtbot):
     return widget
 
 
+@pytest.fixture
+def layer_annotations_widget(make_napari_viewer, qtbot):
+    viewer = make_napari_viewer()
+    widget = LayerAnnotationsWidget(viewer)
+    viewer.window.add_dock_widget(widget)
+    return widget
+
+
 def test_initial_values(timestamp_options):
     assert timestamp_options.time_axis.value() == 0
     assert timestamp_options.start_time.value() == 0
     assert timestamp_options.step_time.value() == 1
     assert timestamp_options.prefix.text() == ""
-    assert timestamp_options.suffix.text() == "HH:MM:SS"
+    assert timestamp_options.suffix.text() == ""
     assert timestamp_options.position.currentText() == "top_center"
     assert timestamp_options.ts_size.value() == 12
     assert timestamp_options.x_shift.value() == 0
@@ -50,7 +58,7 @@ def test_set_timestamp_overlay_options(timestamp_options):
     assert timestamp_options.viewer._overlays["timestamp"].start_time == 10
     assert timestamp_options.viewer._overlays["timestamp"].step_size == 2
     assert timestamp_options.viewer._overlays["timestamp"].prefix == "Time ="
-    assert timestamp_options.viewer._overlays["timestamp"].suffix == "s"
+    assert timestamp_options.viewer._overlays["timestamp"].custom_suffix == "s"
     assert (
         timestamp_options.viewer._overlays["timestamp"].position == "top_right"
     )
@@ -65,3 +73,49 @@ def test_set_timestamp_overlay_options(timestamp_options):
         timestamp_options.viewer._overlays["timestamp"].time_format
         == "HH:MM:SS.ss"
     )
+
+
+def test_init(layer_annotations_widget):
+    widget = layer_annotations_widget
+    assert widget.size_slider.value() == 12
+    assert widget.position_combobox.currentText() == "top_left"
+    assert widget.x_offset_spinbox.value() == 5
+    assert widget.y_offset_spinbox.value() == 5
+    assert widget.toggle_visibility_button.isChecked() is True
+    assert widget.color_checkbox.isChecked() is True
+
+
+def test_on_size_slider_change(layer_annotations_widget, qtbot):
+    widget = layer_annotations_widget
+    initial_value = widget.size_slider.value()
+    assert widget.layer_annotator_overlay.size == initial_value
+    widget.size_slider.setValue(15)
+    assert widget.size_slider.value() == 15
+    assert widget.layer_annotator_overlay.size == 15
+
+
+def test_on_x_offset_change(layer_annotations_widget, qtbot):
+    widget = layer_annotations_widget
+    initial_value = widget.x_offset_spinbox.value()
+    assert widget.layer_annotator_overlay.x_spacer == initial_value
+    widget.x_offset_spinbox.setValue(10)
+    assert widget.x_offset_spinbox.value() == 10
+    assert widget.layer_annotator_overlay.x_spacer == 10
+
+
+def test_on_y_offset_change(layer_annotations_widget, qtbot):
+    widget = layer_annotations_widget
+    initial_value = widget.y_offset_spinbox.value()
+    assert widget.layer_annotator_overlay.y_spacer == initial_value
+    widget.y_offset_spinbox.setValue(20)
+    assert widget.y_offset_spinbox.value() == 20
+    assert widget.layer_annotator_overlay.y_spacer == 20
+
+
+def test_on_toggle_visibility(layer_annotations_widget, qtbot):
+    widget = layer_annotations_widget
+    initial_value = widget.toggle_visibility_button.isChecked()
+    assert widget.layer_annotator_overlay.visible == initial_value
+    widget.toggle_visibility_button.click()
+    assert widget.toggle_visibility_button.isChecked() is not initial_value
+    assert widget.layer_annotator_overlay.visible is not initial_value

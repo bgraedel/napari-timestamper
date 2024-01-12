@@ -8,8 +8,13 @@ contributions:
     - id: napari-timestamper.layer_annotations
       python_name: napari_timestamper._widget:LayerAnnotationsWidget
       title: Make Timestamp Widget
+    - id: napari-timestamper.renderer
+      python_name: napari_timestamper._widget:RenderRGBWidget
+      title: Export as RGB
   widgets:
     - command: napari-timestamper.timestamper
       display_name: Timestamper
     - command: napari-timestamper.layer_annotations
       display_name: Layer Annotations
+    - command: napari-timestamper.renderer
+      display_name: Render RGB
