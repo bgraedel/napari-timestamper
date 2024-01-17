@@ -33,6 +33,8 @@ class TimestampOverlay(CanvasOverlay):
 
     color: ColorValue = (0, 1, 0, 1)
     size: int = 10
+    bold: bool = False
+    italic: bool = False
     prefix: str = ""
     custom_suffix: Union[str, None] = None
     time: int = 0
@@ -175,6 +177,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         # setup callbacks
         self.overlay.events.color.connect(self._on_color_change)
         self.overlay.events.size.connect(self._on_size_change)
+        self.overlay.events.bold.connect(self._on_text_change)
+        self.overlay.events.italic.connect(self._on_text_change)
         self.overlay.events.text.connect(self._on_text_change)
         self.overlay.events.y_position_offset.connect(self._on_position_change)
         self.overlay.events.x_position_offset.connect(self._on_position_change)
@@ -300,6 +304,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         Callback function for when the text of the overlay is changed.
         """
         self.node.text = self.overlay.text
+        self.node.bold = self.overlay.bold
+        self.node.italic = self.overlay.italic
 
     def _on_time_change(self, event=None):
         """

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import napari
 import numpy as np
@@ -78,6 +78,7 @@ class CameraSetter:
         """Set up the viewer for rendering."""
         self.viewer.window.qt_viewer.canvas.size = self.target_size
         self._center_on_canvas()
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Reset the viewer after rendering."""
@@ -89,29 +90,54 @@ class CameraSetter:
 
 def render_as_rgb(
     viewer: napari.Viewer,
-    axis: Optional[int],
+    axis: Optional[Union[int, list, np.array]] = None,
     size: tuple(int, int) | None = None,
     upsample_factor: int = 1,
 ):
     """Render the viewer for a single timepoint."""
-    axis = int(axis) if axis is not None else None
+    try:
+        iter(axis)  # check if axis is iterable
+    except TypeError:
+        axis = [axis]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        with CameraSetter(viewer, upsample_factor, size):
+        with CameraSetter(viewer, upsample_factor, size) as setter:
             if axis is not None:
-                rgb = []
-                for i in range(viewer.dims.range[axis][1].astype(int)):
-                    viewer.dims.set_current_step(axis, i)
-                    rendered_img = viewer.window.qt_viewer.canvas.render(
-                        alpha=False
-                    )
-                    rgb.append(rendered_img)
-                rendered_img = np.stack(rgb)
+                # calculate array output size
+                arr_out_size = [len(np.arange(*r)) for r in viewer.dims.range]
+                arr_out_size[-2:] = np.array(setter.target_size)[::-1]
+                # create an empty array matching the size of the expected output
+                rgb = np.zeros(
+                    (
+                        *tuple(arr_out_size),
+                        3,
+                    ),
+                    dtype=np.uint8,
+                )
+                if len(axis) == 1:
+                    axis = axis[0]
+                    for j in range(viewer.dims.range[axis][1].astype(int)):
+                        viewer.dims.set_current_step(axis, j)
+                        rendered_img = viewer.window.qt_viewer.canvas.render(
+                            alpha=False
+                        )
+                        rgb[j] = rendered_img
+                else:
+                    for ax in axis:
+                        for j in range(viewer.dims.range[ax][1].astype(int)):
+                            viewer.dims.set_current_step(ax, j)
+                            rendered_img = (
+                                viewer.window.qt_viewer.canvas.render(
+                                    alpha=False
+                                )
+                            )
+                            rgb[ax, j] = rendered_img
+
             else:
                 rendered_img = viewer.window.qt_viewer.canvas.render(
                     alpha=False
                 )
-    return rendered_img
+    return rgb
 
 
 def save_image_stack(
@@ -128,9 +154,9 @@ def save_image_stack(
         try:
             import cv2
         except ImportError as e:
-            raise ImportError from e(
+            raise ImportError(
                 "You must install opencv to export as mp4, try `pip install opencv-python`"
-            )
+            ) from e
 
         if image.ndim == 3:
             raise ValueError("Mp4 export only works for 4D data")
@@ -159,9 +185,9 @@ def save_image_stack(
         try:
             import imageio
         except ImportError as e:
-            raise ImportError from e(
+            raise ImportError(
                 "You must install imageio to export as gif, try `pip install imageio`"
-            )
+            ) from e
         if image.ndim == 3:
             raise ValueError("Gif export only works for 4D data")
         imageio.mimsave(outpath, image, duration=1000 * 1 / fps)
@@ -170,9 +196,9 @@ def save_image_stack(
         try:
             import imageio
         except ImportError as e:
-            raise ImportError from e(
+            raise ImportError(
                 "You must install imageio to export as png or jpeg, try `pip install imageio`"
-            )
+            ) from e
         if image.ndim == 3:
             imageio.imwrite(outpath, image)
         else:

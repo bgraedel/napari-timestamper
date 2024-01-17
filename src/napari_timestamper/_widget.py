@@ -17,12 +17,15 @@ from qtpy.QtWidgets import (
     QFileDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 from superqt import QLabeledSlider
+from vispy.color import ColorArray
 
 from napari_timestamper._layer_annotator_overlay import (
     LayerAnnotatorOverlay,
@@ -154,6 +157,13 @@ class TimestampWidget(QtWidgets.QWidget):
         self.color = QtWidgets.QPushButton("Choose Color")
         self.color_display = QtWidgets.QFrame()
 
+        # add checkbox for bold and italic
+        self.bold_checkbox = QtWidgets.QCheckBox("Bold")
+        self.bold_checkbox.setChecked(False)
+
+        self.italic_checkbox = QtWidgets.QCheckBox("Italic")
+        self.italic_checkbox.setChecked(False)
+
         self.display_on_scene = QtWidgets.QCheckBox("Display on Scene")
         self.display_on_scene.setChecked(True)
 
@@ -182,9 +192,11 @@ class TimestampWidget(QtWidgets.QWidget):
         self.gridLayout.addWidget(self.time_format, 8, 1)
         self.gridLayout.addWidget(self.color, 9, 1)
         self.gridLayout.addWidget(self.color_display, 9, 0)
-        self.gridLayout.addWidget(self.display_on_scene, 10, 1)
-        self.gridLayout.addWidget(self.scale_with_zoom, 10, 0)
-        self.gridLayout.addWidget(self.toggle_timestamp, 11, 0, 1, 2)
+        self.gridLayout.addWidget(self.bold_checkbox, 10, 0)
+        self.gridLayout.addWidget(self.italic_checkbox, 10, 1)
+        self.gridLayout.addWidget(self.display_on_scene, 11, 1)
+        self.gridLayout.addWidget(self.scale_with_zoom, 11, 0)
+        self.gridLayout.addWidget(self.toggle_timestamp, 12, 0, 1, 2)
         self.setLayout(self.gridLayout)
 
         self.spacer = QtWidgets.QSpacerItem(
@@ -217,6 +229,8 @@ class TimestampWidget(QtWidgets.QWidget):
             warnings.simplefilter("ignore")
             timestamp_overlay = self.viewer._overlays["timestamp"]
         timestamp_overlay.color = self.chosen_color
+        timestamp_overlay.bold = self.bold_checkbox.isChecked()
+        timestamp_overlay.italic = self.italic_checkbox.isChecked()
         timestamp_overlay.size = self.ts_size.value()
         timestamp_overlay.position = self.position.currentText()
         timestamp_overlay.prefix = self.prefix.text()
@@ -256,6 +270,12 @@ class TimestampWidget(QtWidgets.QWidget):
         self.scale_with_zoom.stateChanged.connect(
             self._set_timestamp_overlay_options
         )
+        self.bold_checkbox.stateChanged.connect(
+            self._set_timestamp_overlay_options
+        )
+        self.italic_checkbox.stateChanged.connect(
+            self._set_timestamp_overlay_options
+        )
 
 
 class LayerAnnotationsWidget(QtWidgets.QWidget):
@@ -276,11 +296,13 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.viewer = viewer
         self.chosen_color = "grey"  # Default color
+        self.chosen_bgcolor = "grey"  # Default color
         self._setupUi()
         self._connect_all_changes()
         self._setup_overlay()
         self._set_layer_annotator_overlay_options()
         self._on_color_combobox_change()
+        self._on_background_color_combobox_change()
 
     def _setup_overlay(self):
         with warnings.catch_warnings():
@@ -347,10 +369,10 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.gridLayout.addWidget(self.xy_offset_label, 2, 0)
         self.gridLayout.addLayout(self.offset_layout, 2, 1)
 
-        self.gridLayout.addWidget(self.toggle_visibility_button, 3, 0, 1, 2)
+        self.gridLayout.addWidget(self.toggle_visibility_button, 8, 0, 1, 2)
 
         # Choose wether to use layer color or custom color by ticking the checkbox
-        self.color_checkbox = QtWidgets.QCheckBox("Use Layer Colormapr")
+        self.color_checkbox = QtWidgets.QCheckBox("Use Layer Color")
         self.color_checkbox.setChecked(True)
         self.gridLayout.addWidget(self.color_checkbox, 4, 0)
 
@@ -361,13 +383,46 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         # Adding Color Picker to Layout
         self.gridLayout.addWidget(self.color, 4, 1)
 
+        # Add Checkbox for bold and italic
+        self.bold_checkbox = QtWidgets.QCheckBox("Bold")
+        self.bold_checkbox.setChecked(False)
+        self.gridLayout.addWidget(self.bold_checkbox, 5, 0)
+
+        self.italic_checkbox = QtWidgets.QCheckBox("Italic")
+        self.italic_checkbox.setChecked(False)
+        self.gridLayout.addWidget(self.italic_checkbox, 5, 1)
+
+        # Choose wether to use layer color or custom color by ticking the checkbox
+        self.bgcolor_checkbox = QtWidgets.QCheckBox("Show Background Color")
+        self.bgcolor_checkbox.setChecked(False)
+        self.gridLayout.addWidget(self.bgcolor_checkbox, 6, 0)
+
+        # Color Picker
+        self.bgcolor = QtWidgets.QPushButton("Choose Color")
+        self._update_background_color_button_icon(
+            self.chosen_bgcolor
+        )  # Update button icon
+
+        # Adding Color Picker to Layout
+        self.gridLayout.addWidget(self.bgcolor, 6, 1)
+
+        # opacity Slider
+        self.opacity_label = QtWidgets.QLabel("Background Opacity")
+        self.opacity_slider = QLabeledSlider(QtCore.Qt.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(100)
+
+        # Adding Widgets to Layout
+        self.gridLayout.addWidget(self.opacity_label, 7, 0)
+        self.gridLayout.addWidget(self.opacity_slider, 7, 1)
+
         self.spacer = QtWidgets.QSpacerItem(
             20,
             40,
             QtWidgets.QSizePolicy.Minimum,
             QtWidgets.QSizePolicy.Expanding,
         )
-        self.gridLayout.addItem(self.spacer, 5, 0, 1, 2)
+        self.gridLayout.addItem(self.spacer, 9, 0, 1, 2)
 
         # Set the layout to the widget
         self.setLayout(self.gridLayout)
@@ -378,6 +433,9 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.color_checkbox.stateChanged.connect(
             self._on_color_combobox_change
         )
+        self.bgcolor_checkbox.stateChanged.connect(
+            self._on_background_color_combobox_change
+        )
 
     def _update_color_button_icon(self, color_str):
         pixmap = QtGui.QPixmap(20, 20)  # Create a QPixmap of size 20x20
@@ -386,6 +444,14 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         )  # Fill the pixmap with the chosen color
         icon = QtGui.QIcon(pixmap)  # Convert pixmap to QIcon
         self.color.setIcon(icon)  # Set the icon for the button
+
+    def _update_background_color_button_icon(self, color_str):
+        pixmap = QtGui.QPixmap(20, 20)  # Create a QPixmap of size 20x20
+        pixmap.fill(
+            QtGui.QColor(color_str)
+        )  # Fill the pixmap with the chosen color
+        icon = QtGui.QIcon(pixmap)  # Convert pixmap to QIcon
+        self.bgcolor.setIcon(icon)  # Set the icon for the button
 
     def _on_color_combobox_change(self):
         """
@@ -403,9 +469,33 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
 
         self._set_layer_annotator_overlay_options()
 
+    def _on_background_color_combobox_change(self):
+        """
+        Slot function to handle changes in the background color combobox.
+        """
+        if not self.bgcolor_checkbox.isChecked():
+            self.bgcolor.setEnabled(False)
+            self._update_background_color_button_icon("grey")
+            self.layer_annotator_overlay.show_background = False
+            self.opacity_label.setEnabled(False)
+            self.opacity_slider.setEnabled(False)
+        else:
+            self.bgcolor.setEnabled(True)
+            self._update_background_color_button_icon(self.chosen_bgcolor)
+            self.layer_annotator_overlay.show_background = True
+            self.layer_annotator_overlay.bg_color = ColorArray(
+                self.chosen_bgcolor, alpha=self.opacity_slider.value() / 100
+            )
+            self.opacity_label.setEnabled(True)
+            self.opacity_slider.setEnabled(True)
+
     def _open_color_dialog(self):
         self.color_dialog = QtWidgets.QColorDialog(parent=self)
         self.color_dialog.open(self._set_colour)
+
+    def _open_background_color_dialog(self):
+        self.color_dialog = QtWidgets.QColorDialog(parent=self)
+        self.color_dialog.open(self._set_background_colour)
 
     def _set_colour(self):
         color = self.color_dialog.selectedColor()
@@ -413,6 +503,19 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
             self.chosen_color = color.name()
             self._update_color_button_icon(self.chosen_color)
             self._set_layer_annotator_overlay_options()
+
+    def _set_background_colour(self):
+        color = self.color_dialog.selectedColor()
+        if color.isValid():
+            self.chosen_bgcolor = color.name()
+            self._update_background_color_button_icon(self.chosen_bgcolor)
+            self._set_layer_annotator_overlay_options()
+            self._on_background_color_combobox_change()
+
+    def _set_opacity(self):
+        self.layer_annotator_overlay.bg_color = ColorArray(
+            self.chosen_bgcolor, alpha=self.opacity_slider.value() / 100
+        )
 
     def _toggle_visibility(self):
         self.layer_annotator_overlay.visible = (
@@ -452,6 +555,10 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
             self.layer_annotator_overlay.color = (
                 self.chosen_color
             )  # Set color for overlay
+            self.layer_annotator_overlay.bold = self.bold_checkbox.isChecked()
+            self.layer_annotator_overlay.italic = (
+                self.italic_checkbox.isChecked()
+            )
 
     def _connect_all_changes(self):
         """
@@ -468,6 +575,15 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         )
         self.color.clicked.connect(self._open_color_dialog)
         self.color.clicked.connect(self._set_layer_annotator_overlay_options)
+        self.bgcolor.clicked.connect(self._open_background_color_dialog)
+        self.bgcolor.clicked.connect(self._set_layer_annotator_overlay_options)
+        self.bold_checkbox.stateChanged.connect(
+            self._set_layer_annotator_overlay_options
+        )
+        self.italic_checkbox.stateChanged.connect(
+            self._set_layer_annotator_overlay_options
+        )
+        self.opacity_slider.valueChanged.connect(self._set_opacity)
 
 
 class RenderRGBWidget(QWidget):
@@ -583,3 +699,82 @@ class RenderRGBWidget(QWidget):
             self.name_lineedit.text(),
             self.export_type_combobox.currentText(),
         )
+
+
+class LayertoRGBWidget(QWidget):
+    def __init__(self, viewer: napari.viewer.Viewer, parent=None):
+        super().__init__(parent)
+        self.viewer = viewer
+
+        self.layout = QVBoxLayout(self)
+
+        self.layer_selector_label = QLabel("Select Layer(s) to convert", self)
+        self.layout.addWidget(self.layer_selector_label)
+        self.layer_selector = QListWidget(self)
+        self.layout.addWidget(self.layer_selector)
+
+        self.name_label = QLabel("Name:", self)
+        self.layout.addWidget(self.name_label)
+
+        self.name_lineedit = QLineEdit(self)
+        self.name_lineedit.setText("output")
+        self.layout.addWidget(self.name_lineedit)
+
+        self.render_button = QPushButton("Convert to RGB", self)
+        self.layout.addWidget(self.render_button)
+
+        self.spacer = QtWidgets.QSpacerItem(
+            20,
+            40,
+            QtWidgets.QSizePolicy.Minimum,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.layout.addItem(self.spacer)
+        self.connect_slots()
+        self._update_layer_selector()
+
+    def _update_layer_selector(self):
+        self.layer_selector.clear()
+        for layer in self.viewer.layers:
+            item = QListWidgetItem(layer.name)
+            item.setCheckState(QtCore.Qt.Unchecked)
+            self.layer_selector.addItem(item)
+
+    def _get_selected_layers(self):
+        return [
+            self.viewer.layers[i]
+            for i in range(self.layer_selector.count())
+            if self.layer_selector.item(i).checkState() == QtCore.Qt.Checked
+        ]
+
+    def on_render_button_clicked(self):
+        layers = self._get_selected_layers()
+        if len(layers) == 0:
+            return
+        rendered_image = self.render_layers_as_rgb(layers)
+        self.viewer.add_image(
+            rendered_image, name=self.name_lineedit.text(), rgb=True
+        )
+
+    def connect_slots(self):
+        self.viewer.layers.events.inserted.connect(self._update_layer_selector)
+        self.viewer.layers.events.removed.connect(self._update_layer_selector)
+        self.render_button.clicked.connect(self.on_render_button_clicked)
+
+    def render_layers_as_rgb(self, layers):
+        temporary_removed_layers = {}
+        # loop over all layers, position them in the center of the canvas, render them, and save them
+        for layer_idx, layer in enumerate(self.viewer.layers):
+            if layer in layers:
+                layer.visible = True
+            else:
+                temporary_removed_layers[layer_idx] = self.viewer.layers.pop(
+                    layer_idx
+                )
+
+        ax = [idx for idx, ax in enumerate(self.viewer.dims.range[:-2])]
+        # loop over all axis
+        rendered_image = render_as_rgb(self.viewer, ax, None)
+        for layer_idx, layer in temporary_removed_layers.items():
+            self.viewer.layers.insert(layer_idx, layer)
+        return rendered_image
