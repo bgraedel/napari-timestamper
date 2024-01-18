@@ -66,6 +66,8 @@ class TimestampWidget(QtWidgets.QWidget):
         """
         super().__init__(parent)
         self.chosen_color = "white"
+        self.chosen_bgcolor = "black"
+        self.chosen_outline_color = "white"
         self.viewer = viewer
         self._setupUi()
         self._connect_all_changes()
@@ -154,8 +156,36 @@ class TimestampWidget(QtWidgets.QWidget):
             TimestampOverlay._get_allowed_format_specifiers()
         )
 
+        self.color_label = QtWidgets.QLabel("Set Timestamp Color")
         self.color = QtWidgets.QPushButton("Choose Color")
-        self.color_display = QtWidgets.QFrame()
+
+        # add checkbox for background
+        self.bgcolor_checkbox = QtWidgets.QCheckBox("Background Color")
+        self.bgcolor_checkbox.setChecked(False)
+
+        self.bgcolor = QtWidgets.QPushButton("Choose Color")
+        self.bgcolor.setEnabled(False)
+
+        # opacity Slider
+        self.opacity_label = QtWidgets.QLabel("Background Opacity")
+        self.opacity_slider = QLabeledSlider(QtCore.Qt.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(100)
+        self.opacity_label.setEnabled(False)
+
+        # outline checkbox
+        self.outline_checkbox = QtWidgets.QCheckBox("Outline")
+        self.outline_checkbox.setChecked(False)
+
+        # outline color
+        self.outline_color = QtWidgets.QPushButton("Choose Outline Color")
+        self.outline_color.setEnabled(False)
+
+        # outline_size
+        self.outline_size_label = QtWidgets.QLabel("Outline Size")
+        self.outline_size = QtWidgets.QSpinBox()
+        self.outline_size.setRange(0, 100)
+        self.outline_size.setValue(1)
 
         # add checkbox for bold and italic
         self.bold_checkbox = QtWidgets.QCheckBox("Bold")
@@ -190,13 +220,23 @@ class TimestampWidget(QtWidgets.QWidget):
         self.gridLayout.addLayout(self.shiftlayout, 7, 1)
         self.gridLayout.addWidget(self.time_format_label, 8, 0)
         self.gridLayout.addWidget(self.time_format, 8, 1)
+        self.gridLayout.addWidget(self.color_label, 9, 0)
         self.gridLayout.addWidget(self.color, 9, 1)
-        self.gridLayout.addWidget(self.color_display, 9, 0)
-        self.gridLayout.addWidget(self.bold_checkbox, 10, 0)
-        self.gridLayout.addWidget(self.italic_checkbox, 10, 1)
-        self.gridLayout.addWidget(self.display_on_scene, 11, 1)
-        self.gridLayout.addWidget(self.scale_with_zoom, 11, 0)
-        self.gridLayout.addWidget(self.toggle_timestamp, 12, 0, 1, 2)
+        self.gridLayout.addWidget(self.outline_checkbox, 10, 0)
+        self.gridLayout.addWidget(self.outline_color, 10, 1)
+        self.gridLayout.addWidget(self.outline_size_label, 11, 0)
+        self.gridLayout.addWidget(self.outline_size, 11, 1)
+
+        self.gridLayout.addWidget(self.bgcolor_checkbox, 12, 0)
+        self.gridLayout.addWidget(self.bgcolor, 12, 1)
+        self.gridLayout.addWidget(self.opacity_label, 13, 0)
+        self.gridLayout.addWidget(self.opacity_slider, 13, 1)
+
+        self.gridLayout.addWidget(self.bold_checkbox, 14, 0)
+        self.gridLayout.addWidget(self.italic_checkbox, 14, 1)
+        self.gridLayout.addWidget(self.display_on_scene, 15, 1)
+        self.gridLayout.addWidget(self.scale_with_zoom, 15, 0)
+        self.gridLayout.addWidget(self.toggle_timestamp, 16, 0, 1, 2)
         self.setLayout(self.gridLayout)
 
         self.spacer = QtWidgets.QSpacerItem(
@@ -205,23 +245,86 @@ class TimestampWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Minimum,
             QtWidgets.QSizePolicy.Expanding,
         )
-        self.gridLayout.addItem(self.spacer, 12, 0, 1, 2)
+        self.gridLayout.addItem(self.spacer, 17, 0, 1, 2)
 
-        self.color_display.setStyleSheet(
-            "QWidget {background-color: %s}" % self.chosen_color
+        self._update_color_button_icon(self.color, self.chosen_color)
+        self._update_color_button_icon(self.bgcolor, self.chosen_bgcolor)
+        self._update_color_button_icon(
+            self.outline_color, self.chosen_outline_color
         )
+
+    def _update_color_button_icon(self, color_button, color_str):
+        pixmap = QtGui.QPixmap(20, 20)  # Create a QPixmap of size 20x20
+        pixmap.fill(
+            QtGui.QColor(color_str)
+        )  # Fill the pixmap with the chosen color
+        icon = QtGui.QIcon(pixmap)  # Convert pixmap to QIcon
+        color_button.setIcon(icon)  # Set the icon for the button
+
+    def _toggle_bgcolor(self):
+        if self.bgcolor_checkbox.isChecked():
+            self.bgcolor.setEnabled(True)
+            self.opacity_label.setEnabled(True)
+            self.opacity_slider.setEnabled(True)
+            self._set_timestamp_overlay_options()
+        else:
+            self.bgcolor.setEnabled(False)
+            self.opacity_label.setEnabled(False)
+            self.opacity_slider.setEnabled(False)
+            self._update_color_button_icon(self.bgcolor, "grey")
+            self._set_timestamp_overlay_options()
+
+    def _on_outline_color_combobox_change(self):
+        """
+        Slot function to handle changes in the outline color combobox.
+        """
+        if not self.outline_checkbox.isChecked():
+            self.outline_color.setEnabled(False)
+            self._update_color_button_icon(self.outline_color, "grey")
+            self.timestamp_overlay.show_outline = False
+        else:
+            self.outline_color.setEnabled(True)
+            self._update_color_button_icon(
+                self.outline_color, self.chosen_outline_color
+            )
+            self.timestamp_overlay.show_outline = True
+            self.timestamp_overlay.outline_color = ColorArray(
+                self.chosen_outline_color
+            )
 
     def _open_color_dialog(self):
         self.color_dialog = QtWidgets.QColorDialog(parent=self)
         self.color_dialog.open(self._set_colour)
 
+    def _open_background_color_dialog(self):
+        self.bg_color_dialog = QtWidgets.QColorDialog(parent=self)
+        self.bg_color_dialog.open(self._set_background_colour)
+
+    def _open_outline_color_dialog(self):
+        self.color_dialog = QtWidgets.QColorDialog(parent=self)
+        self.color_dialog.open(self._set_outline_colour)
+
     def _set_colour(self):
         color = self.color_dialog.selectedColor()
         if color.isValid():
-            self.color_display.setStyleSheet(
-                "QWidget {background-color: %s}" % color.name()
-            )
             self.chosen_color = color.name()
+            self._update_color_button_icon(self.color, self.chosen_color)
+            self._set_timestamp_overlay_options()
+
+    def _set_background_colour(self):
+        color = self.bg_color_dialog.selectedColor()
+        if color.isValid():
+            self.chosen_bgcolor = color.name()
+            self._update_color_button_icon(self.bgcolor, self.chosen_color)
+            self._set_timestamp_overlay_options()
+
+    def _set_outline_colour(self):
+        color = self.color_dialog.selectedColor()
+        if color.isValid():
+            self.chosen_outline_color = color.name()
+            self._update_color_button_icon(
+                self.outline_color, self.chosen_outline_color
+            )
             self._set_timestamp_overlay_options()
 
     def _set_timestamp_overlay_options(self):
@@ -240,11 +343,18 @@ class TimestampWidget(QtWidgets.QWidget):
         timestamp_overlay.start_time = self.start_time.value()
         timestamp_overlay.step_size = self.step_time.value()
         timestamp_overlay.time_format = self.time_format.currentText()
-        timestamp_overlay.x_position_offset = self.x_shift.value()
-        timestamp_overlay.y_position_offset = self.y_shift.value()
+        timestamp_overlay.x_spacer = self.x_shift.value()
+        timestamp_overlay.y_spacer = self.y_shift.value()
         timestamp_overlay.time_axis = self.time_axis.value()
         timestamp_overlay.display_on_scene = self.display_on_scene.isChecked()
         timestamp_overlay.scale_with_zoom = self.scale_with_zoom.isChecked()
+        timestamp_overlay.bg_color = ColorArray(
+            self.chosen_bgcolor, alpha=self.opacity_slider.value() / 100
+        )
+        timestamp_overlay.show_background = self.bgcolor_checkbox.isChecked()
+        timestamp_overlay.show_outline = self.outline_checkbox.isChecked()
+        timestamp_overlay.outline_color = ColorArray(self.chosen_outline_color)
+        timestamp_overlay.outline_thickness = self.outline_size.value()
 
     def _connect_all_changes(self):
         for i in [
@@ -276,6 +386,18 @@ class TimestampWidget(QtWidgets.QWidget):
         self.italic_checkbox.stateChanged.connect(
             self._set_timestamp_overlay_options
         )
+        self.bgcolor_checkbox.stateChanged.connect(self._toggle_bgcolor)
+        self.bgcolor.clicked.connect(self._open_background_color_dialog)
+        self.opacity_slider.valueChanged.connect(
+            self._set_timestamp_overlay_options
+        )
+        self.outline_checkbox.stateChanged.connect(
+            self._on_outline_color_combobox_change
+        )
+        self.outline_color.clicked.connect(self._open_outline_color_dialog)
+        self.outline_size.valueChanged.connect(
+            self._set_timestamp_overlay_options
+        )
 
 
 class LayerAnnotationsWidget(QtWidgets.QWidget):
@@ -295,8 +417,9 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
     def __init__(self, viewer: napari.viewer.Viewer, parent=None):
         super().__init__(parent)
         self.viewer = viewer
-        self.chosen_color = "grey"  # Default color
-        self.chosen_bgcolor = "grey"  # Default color
+        self.chosen_color = "white"  # Default color
+        self.chosen_bgcolor = "black"  # Default color
+        self.chosen_outline_color = "white"  # Default color
         self._setupUi()
         self._connect_all_changes()
         self._setup_overlay()
@@ -344,10 +467,10 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.xy_offset_label = QtWidgets.QLabel("XY Position Offset")
         self.x_offset_spinbox = QtWidgets.QSpinBox()
         self.x_offset_spinbox.setRange(-1000, 1000)
-        self.x_offset_spinbox.setValue(5)
+        self.x_offset_spinbox.setValue(0)
         self.y_offset_spinbox = QtWidgets.QSpinBox()
         self.y_offset_spinbox.setRange(-1000, 1000)
-        self.y_offset_spinbox.setValue(5)
+        self.y_offset_spinbox.setValue(0)
         self.offset_layout = QtWidgets.QHBoxLayout()
         self.offset_layout.addWidget(self.x_offset_spinbox)
         self.offset_layout.addWidget(self.y_offset_spinbox)
@@ -369,7 +492,7 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.gridLayout.addWidget(self.xy_offset_label, 2, 0)
         self.gridLayout.addLayout(self.offset_layout, 2, 1)
 
-        self.gridLayout.addWidget(self.toggle_visibility_button, 8, 0, 1, 2)
+        self.gridLayout.addWidget(self.toggle_visibility_button, 10, 0, 1, 2)
 
         # Choose wether to use layer color or custom color by ticking the checkbox
         self.color_checkbox = QtWidgets.QCheckBox("Use Layer Color")
@@ -378,7 +501,9 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
 
         # Color Picker
         self.color = QtWidgets.QPushButton("Choose Color")
-        self._update_color_button_icon(self.chosen_color)  # Update button icon
+        self._update_color_button_icon(
+            self.color, self.chosen_color
+        )  # Update button icon
 
         # Adding Color Picker to Layout
         self.gridLayout.addWidget(self.color, 4, 1)
@@ -399,8 +524,8 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
 
         # Color Picker
         self.bgcolor = QtWidgets.QPushButton("Choose Color")
-        self._update_background_color_button_icon(
-            self.chosen_bgcolor
+        self._update_color_button_icon(
+            self.bgcolor, self.chosen_bgcolor
         )  # Update button icon
 
         # Adding Color Picker to Layout
@@ -408,6 +533,7 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
 
         # opacity Slider
         self.opacity_label = QtWidgets.QLabel("Background Opacity")
+
         self.opacity_slider = QLabeledSlider(QtCore.Qt.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(100)
@@ -416,13 +542,37 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.gridLayout.addWidget(self.opacity_label, 7, 0)
         self.gridLayout.addWidget(self.opacity_slider, 7, 1)
 
+        # Choose wether to show outline or not
+        self.outline_checkbox = QtWidgets.QCheckBox("Show Outline")
+        self.outline_checkbox.setChecked(False)
+
+        # set outline color
+        self.outline_color = QtWidgets.QPushButton("Choose Outline Color")
+        self.outline_color.setEnabled(False)
+        self._update_color_button_icon(
+            self.outline_color, self.chosen_outline_color
+        )  # Update button icon
+
+        # Adding Widgets to Layout
+        self.gridLayout.addWidget(self.outline_checkbox, 8, 0)
+        self.gridLayout.addWidget(self.outline_color, 8, 1)
+
+        # set outline size
+        self.outline_size_label = QtWidgets.QLabel("Outline Size")
+        self.outline_size = QtWidgets.QSpinBox()
+        self.outline_size.setRange(0, 100)
+        self.outline_size.setValue(1)
+
+        # Adding Widgets to Layout
+        self.gridLayout.addWidget(self.outline_size_label, 9, 0)
+
         self.spacer = QtWidgets.QSpacerItem(
             20,
             40,
             QtWidgets.QSizePolicy.Minimum,
             QtWidgets.QSizePolicy.Expanding,
         )
-        self.gridLayout.addItem(self.spacer, 9, 0, 1, 2)
+        self.gridLayout.addItem(self.spacer, 11, 0, 1, 2)
 
         # Set the layout to the widget
         self.setLayout(self.gridLayout)
@@ -437,21 +587,13 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
             self._on_background_color_combobox_change
         )
 
-    def _update_color_button_icon(self, color_str):
+    def _update_color_button_icon(self, color_button, color_str):
         pixmap = QtGui.QPixmap(20, 20)  # Create a QPixmap of size 20x20
         pixmap.fill(
             QtGui.QColor(color_str)
         )  # Fill the pixmap with the chosen color
         icon = QtGui.QIcon(pixmap)  # Convert pixmap to QIcon
-        self.color.setIcon(icon)  # Set the icon for the button
-
-    def _update_background_color_button_icon(self, color_str):
-        pixmap = QtGui.QPixmap(20, 20)  # Create a QPixmap of size 20x20
-        pixmap.fill(
-            QtGui.QColor(color_str)
-        )  # Fill the pixmap with the chosen color
-        icon = QtGui.QIcon(pixmap)  # Convert pixmap to QIcon
-        self.bgcolor.setIcon(icon)  # Set the icon for the button
+        color_button.setIcon(icon)  # Set the icon for the button
 
     def _on_color_combobox_change(self):
         """
@@ -459,12 +601,14 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         """
         if self.color_checkbox.isChecked():
             self.color.setEnabled(False)
-            self._update_color_button_icon("grey")  # Update button icon
+            self._update_color_button_icon(
+                self.color, "grey"
+            )  # Update button icon
             self.layer_annotator_overlay.use_layer_color = True
 
         else:
             self.color.setEnabled(True)
-            self._update_color_button_icon(self.chosen_color)
+            self._update_color_button_icon(self.color, self.chosen_color)
             self.layer_annotator_overlay.use_layer_color = False
 
         self._set_layer_annotator_overlay_options()
@@ -475,19 +619,37 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         """
         if not self.bgcolor_checkbox.isChecked():
             self.bgcolor.setEnabled(False)
-            self._update_background_color_button_icon("grey")
+            self._update_color_button_icon(self.bgcolor, "grey")
             self.layer_annotator_overlay.show_background = False
             self.opacity_label.setEnabled(False)
             self.opacity_slider.setEnabled(False)
         else:
             self.bgcolor.setEnabled(True)
-            self._update_background_color_button_icon(self.chosen_bgcolor)
+            self._update_color_button_icon(self.bgcolor, self.chosen_bgcolor)
             self.layer_annotator_overlay.show_background = True
             self.layer_annotator_overlay.bg_color = ColorArray(
                 self.chosen_bgcolor, alpha=self.opacity_slider.value() / 100
             )
             self.opacity_label.setEnabled(True)
             self.opacity_slider.setEnabled(True)
+
+    def _on_outline_color_combobox_change(self):
+        """
+        Slot function to handle changes in the outline color combobox.
+        """
+        if not self.outline_checkbox.isChecked():
+            self.outline_color.setEnabled(False)
+            self._update_color_button_icon(self.outline_color, "grey")
+            self.layer_annotator_overlay.show_outline = False
+        else:
+            self.outline_color.setEnabled(True)
+            self._update_color_button_icon(
+                self.outline_color, self.chosen_color
+            )
+            self.layer_annotator_overlay.show_outline = True
+            self.layer_annotator_overlay.outline_color = ColorArray(
+                self.chosen_outline_color
+            )
 
     def _open_color_dialog(self):
         self.color_dialog = QtWidgets.QColorDialog(parent=self)
@@ -497,20 +659,33 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.color_dialog = QtWidgets.QColorDialog(parent=self)
         self.color_dialog.open(self._set_background_colour)
 
+    def _open_outline_color_dialog(self):
+        self.color_dialog = QtWidgets.QColorDialog(parent=self)
+        self.color_dialog.open(self._set_outline_colour)
+
     def _set_colour(self):
         color = self.color_dialog.selectedColor()
         if color.isValid():
             self.chosen_color = color.name()
-            self._update_color_button_icon(self.chosen_color)
+            self._update_color_button_icon(self.color, self.chosen_color)
             self._set_layer_annotator_overlay_options()
 
     def _set_background_colour(self):
         color = self.color_dialog.selectedColor()
         if color.isValid():
             self.chosen_bgcolor = color.name()
-            self._update_background_color_button_icon(self.chosen_bgcolor)
+            self._update_color_button_icon(self.bgcolor, self.chosen_color)
             self._set_layer_annotator_overlay_options()
             self._on_background_color_combobox_change()
+
+    def _set_outline_colour(self):
+        color = self.color_dialog.selectedColor()
+        if color.isValid():
+            self.chosen_outline_color = color.name()
+            self._update_color_button_icon(
+                self.outline_color, self.chosen_color
+            )
+            self._set_layer_annotator_overlay_options()
 
     def _set_opacity(self):
         self.layer_annotator_overlay.bg_color = ColorArray(
@@ -559,6 +734,21 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
             self.layer_annotator_overlay.italic = (
                 self.italic_checkbox.isChecked()
             )
+            self.layer_annotator_overlay.show_background = (
+                self.bgcolor_checkbox.isChecked()
+            )
+            self.layer_annotator_overlay.bg_color = ColorArray(
+                self.chosen_bgcolor, alpha=self.opacity_slider.value() / 100
+            )
+            self.layer_annotator_overlay.show_outline = (
+                self.outline_checkbox.isChecked()
+            )
+            self.layer_annotator_overlay.outline_color = ColorArray(
+                self.chosen_outline_color
+            )
+            self.layer_annotator_overlay.outline_thickness = (
+                self.outline_size.value()
+            )
 
     def _connect_all_changes(self):
         """
@@ -584,6 +774,13 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
             self._set_layer_annotator_overlay_options
         )
         self.opacity_slider.valueChanged.connect(self._set_opacity)
+        self.outline_checkbox.stateChanged.connect(
+            self._on_outline_color_combobox_change
+        )
+        self.outline_color.clicked.connect(self._open_outline_color_dialog)
+        self.outline_color.clicked.connect(
+            self._set_layer_annotator_overlay_options
+        )
 
 
 class RenderRGBWidget(QWidget):
@@ -774,7 +971,9 @@ class LayertoRGBWidget(QWidget):
 
         ax = [idx for idx, ax in enumerate(self.viewer.dims.range[:-2])]
         # loop over all axis
-        rendered_image = render_as_rgb(self.viewer, ax, None)
-        for layer_idx, layer in temporary_removed_layers.items():
-            self.viewer.layers.insert(layer_idx, layer)
+        try:
+            rendered_image = render_as_rgb(self.viewer, ax, None)
+        finally:
+            for layer_idx, layer in temporary_removed_layers.items():
+                self.viewer.layers.insert(layer_idx, layer)
         return rendered_image

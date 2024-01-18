@@ -105,7 +105,12 @@ def render_as_rgb(
             if axis is not None:
                 # calculate array output size
                 arr_out_size = [len(np.arange(*r)) for r in viewer.dims.range]
-                arr_out_size[-2:] = np.array(setter.target_size)[::-1]
+                arr_out_size[-2:] = (
+                    np.array(setter.target_size)[::-1]
+                    * viewer.window.qt_viewer.canvas.pixel_scale
+                )
+                # convert to int
+                arr_out_size = [int(i) for i in arr_out_size]
                 # create an empty array matching the size of the expected output
                 rgb = np.zeros(
                     (

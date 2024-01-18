@@ -63,12 +63,8 @@ def test_set_timestamp_overlay_options(timestamp_options):
         timestamp_options.viewer._overlays["timestamp"].position == "top_right"
     )
     assert timestamp_options.viewer._overlays["timestamp"].size == 20
-    assert (
-        timestamp_options.viewer._overlays["timestamp"].x_position_offset == 5
-    )
-    assert (
-        timestamp_options.viewer._overlays["timestamp"].y_position_offset == -5
-    )
+    assert timestamp_options.viewer._overlays["timestamp"].x_spacer == 5
+    assert timestamp_options.viewer._overlays["timestamp"].y_spacer == -5
     assert (
         timestamp_options.viewer._overlays["timestamp"].time_format
         == "HH:MM:SS.ss"
@@ -79,8 +75,8 @@ def test_init(layer_annotations_widget):
     widget = layer_annotations_widget
     assert widget.size_slider.value() == 12
     assert widget.position_combobox.currentText() == "top_left"
-    assert widget.x_offset_spinbox.value() == 5
-    assert widget.y_offset_spinbox.value() == 5
+    assert widget.x_offset_spinbox.value() == 0
+    assert widget.y_offset_spinbox.value() == 0
     assert widget.toggle_visibility_button.isChecked() is True
     assert widget.color_checkbox.isChecked() is True
 

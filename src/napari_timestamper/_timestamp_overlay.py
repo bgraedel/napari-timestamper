@@ -22,8 +22,11 @@ from napari.components._viewer_constants import CanvasPosition
 from napari.components.overlays import CanvasOverlay
 from napari.utils.color import ColorValue
 from napari.utils.events import disconnect_events
-from vispy.scene.visuals import Text
+from vispy.color import ColorArray
 from vispy.visuals.transforms import STTransform
+
+from napari_timestamper.text_visual import TextWithBoxVisual
+from napari_timestamper.utils import _find_grid_offsets
 
 
 class TimestampOverlay(CanvasOverlay):
@@ -41,8 +44,13 @@ class TimestampOverlay(CanvasOverlay):
     start_time: int = 0
     step_size: float = 1
     time_format: str = "MM:SS"
-    y_position_offset: int = 0
-    x_position_offset: int = 0
+    bg_color: ColorArray = ColorArray("black")
+    show_outline: bool = False
+    outline_color: ColorArray = ColorArray("white")
+    outline_thickness: float = 1
+    show_background: bool = True
+    y_spacer: int = 0
+    x_spacer: int = 0
     time_axis: int = 0
     position: CanvasPosition = CanvasPosition.BOTTOM_RIGHT
     scale_with_zoom: bool = True
@@ -156,7 +164,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
 
     def __init__(self, *, viewer, overlay, parent=None):
         super().__init__(
-            node=Text(
+            node=TextWithBoxVisual(
                 text=overlay.text,
                 color=overlay.color,
                 font_size=overlay.size,
@@ -166,11 +174,11 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
             overlay=overlay,
             parent=parent,
         )
-        self.y_spacer = 10
-        self.x_spacer = 10
+        self.y_spacer = overlay.y_spacer
+        self.x_spacer = overlay.x_spacer
         self.x_size = 0
         self.y_size = 0
-        self.scale_factor = 1
+        self.camera_scaling_factor = 1
         self.node.transform = STTransform()
         self.overlay.events.position.connect(self._on_position_change)
 
@@ -179,9 +187,15 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         self.overlay.events.size.connect(self._on_size_change)
         self.overlay.events.bold.connect(self._on_text_change)
         self.overlay.events.italic.connect(self._on_text_change)
+        self.overlay.events.bg_color.connect(self._on_text_change)
+        self.overlay.events.show_background.connect(self._on_text_change)
+        self.overlay.events.show_outline.connect(self._on_text_change)
+        self.overlay.events.outline_color.connect(self._on_text_change)
+        self.overlay.events.outline_thickness.connect(self._on_text_change)
+
         self.overlay.events.text.connect(self._on_text_change)
-        self.overlay.events.y_position_offset.connect(self._on_position_change)
-        self.overlay.events.x_position_offset.connect(self._on_position_change)
+        self.overlay.events.y_spacer.connect(self._update_offsets)
+        self.overlay.events.x_spacer.connect(self._update_offsets)
         self.overlay.events.time_format.connect(self._on_text_change)
         self.overlay.events.start_time.connect(self._on_time_change)
         self.overlay.events.step_size.connect(self._on_time_change)
@@ -194,6 +208,14 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         self.viewer.camera.events.zoom.connect(self._on_viewer_zoom_change)
         self.node.events.parent_change.connect(self._on_parent_change)
         self.reset()
+
+    def _update_offsets(self, event=None):
+        """
+        Callback function for when the offsets of the overlay are changed.
+        """
+        self.x_spacer = self.overlay.x_spacer
+        self.y_spacer = self.overlay.y_spacer
+        self._on_position_change()
 
     def _on_parent_change(self, event):
         if event.old is not None:
@@ -208,7 +230,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         """
         Callback function for when the viewer is zoomed.
         """
-        self.scale_factor = self.viewer.camera.zoom
+        self.camera_scaling_factor = self.viewer.camera.zoom
         self._on_size_change()
 
     def _on_color_change(self, event=None):
@@ -238,6 +260,18 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
                     self.viewer.dims.range[-2][-2],
                     self.viewer.dims.range[-1][-2],
                 )
+                if self.viewer.grid.enabled:
+                    layer_translations = _find_grid_offsets(self.viewer)
+                    # find maximum x and y translation
+                    x_max_offset = max(
+                        [translation[-1] for translation in layer_translations]
+                    )
+                    y_max_offset = max(
+                        [translation[-2] for translation in layer_translations]
+                    )
+                    x_max += x_max_offset
+                    y_max += y_max_offset
+
                 self.node.parent = (
                     self.viewer.window.qt_viewer.view.scene
                 )  # this is a bit ugly and circumvents the overlay system which is not ideal but it works
@@ -284,19 +318,57 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
             ]
         self.node.transform.translate = transform
         self.node.anchors = anchors
-        self.node.pos = (
-            self.overlay.x_position_offset,
-            self.overlay.y_position_offset,
+        self.node._rectagles_visual.spacer = self.overlay.x_spacer
+
+        self.node.update_data(
+            [self.overlay.text],
+            [self.overlay.color],
+            self.overlay.bg_color.rgba.tolist(),
+            self.overlay.size,
+            (0, 0),
+            [x_max],
         )
 
     def _on_size_change(self, event=None):
         """
         Callback function for when the size of the overlay is changed.
         """
-        if self.overlay.scale_with_zoom:
-            self.node.font_size = self.overlay.size * self.scale_factor
-        else:
-            self.node.font_size = self.overlay.size
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            if (
+                self.overlay.scale_with_zoom
+                and self.node.parent is self.viewer.window.qt_viewer.view.scene
+            ):
+                self.node.font_scale_factor = self.camera_scaling_factor
+                self.node.font_size = self.overlay.size
+                self.node.rectangles_scale_factor = 1
+
+            elif (
+                not self.overlay.scale_with_zoom
+                and self.node.parent is self.viewer.window.qt_viewer.view
+            ):
+                self.node.font_scale_factor = 1
+                self.node.font_size = self.overlay.size
+                self.node.rectangles_scale_factor = 1
+
+            elif (
+                not self.overlay.scale_with_zoom
+                and self.node.parent is self.viewer.window.qt_viewer.view.scene
+            ):
+                self.node.font_scale_factor = 1
+                self.node.rectangles_scale_factor = (
+                    1 / self.camera_scaling_factor
+                )
+                self.node.font_size = self.overlay.size
+
+            elif (
+                self.overlay.scale_with_zoom
+                and self.node.parent is self.viewer.window.qt_viewer.view
+            ):
+                self.node.font_scale_factor = self.camera_scaling_factor
+                self.node.rectangles_scale_factor = self.camera_scaling_factor
+                self.node.font_size = self.overlay.size
+
         self._on_position_change()
 
     def _on_text_change(self, event=None):
@@ -306,6 +378,11 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         self.node.text = self.overlay.text
         self.node.bold = self.overlay.bold
         self.node.italic = self.overlay.italic
+        self.node.bgcolor = self.overlay.bg_color.rgba.tolist()
+        self.node.show_background = self.overlay.show_background
+        self.node.show_outline = self.overlay.show_outline
+        self.node.outline_color = self.overlay.outline_color.rgba.tolist()
+        self.node.outline_thickness = self.overlay.outline_thickness
 
     def _on_time_change(self, event=None):
         """

@@ -22,6 +22,7 @@ from vispy.color import ColorArray
 from vispy.visuals.transforms import STTransform
 
 from napari_timestamper.text_visual import TextWithBoxVisual
+from napari_timestamper.utils import _find_grid_offsets
 
 try:
     from napari.utils.compat import StrEnum
@@ -66,9 +67,11 @@ class LayerAnnotatorOverlay(SceneOverlay):
     size: int = 12
     bold: bool = False
     italic: bool = False
-    scale_factor: float = 1
     position: ScenePosition = ScenePosition.TOP_LEFT
     bg_color: ColorArray = ColorArray(["black"])
+    show_outline: bool = False
+    outline_color: ColorArray = ColorArray(["white"])
+    outline_thickness: float = 1
     show_background: bool = False
     y_spacer: int = 0
     x_spacer: int = 0
@@ -100,6 +103,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             overlay=overlay,
             parent=parent,
         )
+        self.camera_scale_factor = 1
         self.x_spacer = self.overlay.x_spacer
         self.y_spacer = self.overlay.y_spacer
         self.x_size = 0
@@ -120,7 +124,9 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.overlay.events.italic.connect(self._on_property_change)
         self.overlay.events.bg_color.connect(self._on_property_change)
         self.overlay.events.show_background.connect(self._on_property_change)
-
+        self.overlay.events.show_outline.connect(self._on_property_change)
+        self.overlay.events.outline_color.connect(self._on_property_change)
+        self.overlay.events.outline_thickness.connect(self._on_property_change)
         self.viewer.camera.events.zoom.connect(self._on_viewer_zoom_change)
         self.viewer.layers.events.inserted.connect(self._on_new_layer_added)
         self.viewer.layers.events.reordered.connect(self._update_annotations)
@@ -130,6 +136,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.viewer.grid.events.enabled.connect(self._update_annotations)
 
         self.reset()
+        self._connect_iniial_layers()
 
     def _update_offsets(self, event=None):
         """
@@ -138,6 +145,16 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.x_spacer = self.overlay.x_spacer
         self.y_spacer = self.overlay.y_spacer
         self._on_position_change()
+
+    def _connect_iniial_layers(self):
+        """
+        Connects the initial layers to the overlay.
+        """
+        for layer in self.viewer.layers:
+            layer.events.visible.connect(self._update_annotations)
+            layer.events.name.connect(self._update_annotations)
+            with contextlib.suppress(AttributeError):
+                layer.events.colormap.connect(self._update_annotations)
 
     def _on_new_layer_added(self, event=None):
         """
@@ -156,7 +173,9 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         Function for when a layer is added or removed from the viewer.
         """
         layers_to_annotate = defaultdict(list)
-        layer_translations = self._find_grid_offsets()  # Get grid offsets
+        layer_translations = _find_grid_offsets(
+            self.viewer
+        )  # Get grid offsets
         layer_translations.reverse()  # Reverse order to match layer order
 
         for i, layer in enumerate(self.viewer.layers[::-1]):
@@ -196,30 +215,11 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
         self.overlay.layers_to_annotate = layers_to_annotate
 
-    def _find_grid_offsets(self):
-        """
-        Finds the offsets for the grid.
-        """
-        layer_translations = []
-        extent = self.viewer._sliced_extent_world
-        n_layers = len(self.viewer.layers)
-        for i, layer in enumerate(self.viewer.layers):
-            i_row, i_column = self.viewer.grid.position(
-                n_layers - 1 - i, n_layers
-            )
-            # viewer._subplot(layer, (i_row, i_column), extent)
-            scene_shift = extent[1] - extent[0]
-            translate_2d = np.multiply(scene_shift[-2:], (i_row, i_column))
-            translate = [0] * layer.ndim
-            translate[-2:] = translate_2d
-            layer_translations.append(translate)
-        return layer_translations
-
     def _on_viewer_zoom_change(self, event=None):
         """
         Callback function for when the viewer is zoomed.
         """
-        self.overlay.scale_factor = self.viewer.camera.zoom
+        self.camera_scale_factor = self.viewer.camera.zoom
         self._on_size_change()
 
     def _on_position_change(self, event=None):
@@ -321,7 +321,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
                     )
                 elif movement_direction == "up":
                     y_offsets[idx] -= (
-                        1.5
+                        1.50
                         * self.overlay.size
                         * existing_offsets.count((y, x))
                     )
@@ -332,8 +332,8 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         """
         Callback function for when the size of the overlay is changed.
         """
-        # self.node.font_size = self.overlay.size * self.overlay.scale_factor
-        self.node.font_scale_factor = self.overlay.scale_factor
+        # self.node.font_size = self.overlay.size * self.camera_scale_factor
+        self.node.font_scale_factor = self.camera_scale_factor
         self.node.font_size = self.overlay.size
         self._on_position_change()
 
@@ -345,6 +345,10 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.node.bold = self.overlay.bold
         self.node.italic = self.overlay.italic
         self.node._rectagles_visual.visible = self.overlay.show_background
+        self.node.outline_color = self.overlay.outline_color
+        self.node.outline_thickness = self.overlay.outline_thickness
+        self.node.show_outline = self.overlay.show_outline
+        self.node.bgcolor = self.overlay.bg_color.rgba.tolist()
         if self.overlay.use_layer_color:
             self.node.color = self.overlay.layers_to_annotate["colors"]
         else:
@@ -367,11 +371,10 @@ if __name__ == "__main__":
     import napari
 
     viewer = napari.Viewer()
-    viewer.window.add_plugin_dock_widget(
-        "napari-timestamper", "Layer Annotations"
-    )
+    viewer.window.add_plugin_dock_widget("napari-timestamper", "Timestamper")
 
-    viewer.add_image(np.random.random((100, 100)))
+    viewer.add_image(np.random.random((100, 100, 100)))
+    viewer.add_image(np.random.random((100, 100, 100)))
 
     # viewer.window.add_plugin_dock_widget("napari-timestamper", 'Layer Annotations')
     napari.run()

@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 from typing import Union
 
 import numpy as np
 from vispy.color import Color
-from vispy.scene.visuals import Compound, Mesh, Text
+from vispy.scene.visuals import Compound, Line, Mesh, Text
 
 
 class MultiRectVisual(Mesh):
@@ -132,11 +134,29 @@ class MultiRectVisual(Mesh):
         self.set_data(vertices=vertices, faces=faces, vertex_colors=colors)
 
     @property
+    def pos(self):
+        return [(rect[0], rect[1]) for rect in self.rect_data]
+
+    @pos.setter
+    def pos(self, pos: Union[list[tuple], tuple]):
+        # bring arguments to correct shape
+        if isinstance(pos, tuple):
+            pos_x = [pos[0]]
+            pos_y = [pos[1]]
+        else:
+            pos_x = [p[0] for p in pos]
+            pos_y = [p[1] for p in pos]
+        self.update_rects(pos_x, pos_y, self.w, self.h, self.color)
+
+    @property
     def x(self):
         return [rect[0] for rect in self.rect_data]
 
     @x.setter
     def x(self, x: list):
+        # check if x is a single value
+        if isinstance(x, (int, float)):
+            x = [x] * len(self.rect_data)
         self.update_rects(x, self.y, self.w, self.h, self.color)
 
     @property
@@ -145,6 +165,9 @@ class MultiRectVisual(Mesh):
 
     @y.setter
     def y(self, y: list):
+        # check if y is a single value
+        if isinstance(y, (int, float)):
+            y = [y] * len(self.rect_data)
         self.update_rects(self.x, y, self.w, self.h, self.color)
 
     @property
@@ -193,6 +216,8 @@ class TextWithBoxVisual(Compound):
         text: Union[list[str], str],
         color: Union[list[str], str] = "white",
         bgcolor: str = "red",
+        outline_color: str = "white",
+        outline_width: float = 1.0,
         font_size: int = 12,
         pos: Union[list[tuple], tuple] = (0, 0),
         anchor_x: str = "left",
@@ -230,8 +255,61 @@ class TextWithBoxVisual(Compound):
         )
 
         self.font_scale_factor = 1
+        self.rectangles_scale_factor = 1
 
-        super().__init__([self._rectagles_visual, self._textvisual])
+        # Initialize the line visual for outlines
+        self._outline_visual = Line(color=outline_color, width=outline_width)
+        self.update_outline()  # Call this method to initialize the outline
+
+        super().__init__(
+            [self._rectagles_visual, self._textvisual, self._outline_visual]
+        )
+
+    def update_outline(self):
+        # Assuming each rectangle is flat on the xy-plane with z=0
+        z = 0
+        vertices = []
+        edges = []
+
+        vertex_count = 0  # Counter for the number of vertices added
+
+        for x, y, w, h in zip(
+            self._rectagles_visual.x,
+            self._rectagles_visual.y,
+            self._rectagles_visual.w,
+            self._rectagles_visual.h,
+        ):
+            (
+                x_offset,
+                y_offset,
+            ) = self._rectagles_visual._calculate_anchor_offset(w, h)
+            # Define the corners of the rectangle in 3D
+            rectangle_vertices = [
+                [x - x_offset, y - y_offset, z],
+                [x - x_offset + w, y - y_offset, z],
+                [x - x_offset + w, y - y_offset + h, z],
+                [x - x_offset, y - y_offset + h, z],
+            ]
+            vertices.extend(rectangle_vertices)
+
+            # Define edges for this rectangle
+            rectangle_edges = [
+                [vertex_count, vertex_count + 1],
+                [vertex_count + 1, vertex_count + 2],
+                [vertex_count + 2, vertex_count + 3],
+                [vertex_count + 3, vertex_count],
+            ]
+            edges.extend(rectangle_edges)
+
+            # Update the vertex count for the next rectangle
+            vertex_count += len(rectangle_vertices)
+
+        self._outline_visual.set_data(
+            pos=np.array(vertices),
+            connect=np.array(edges),
+            color=self.outline_color,
+            width=self.outline_thickness,
+        )
 
     @property
     def color(self):
@@ -256,23 +334,23 @@ class TextWithBoxVisual(Compound):
     @font_size.setter
     def font_size(self, size: int):
         self._textvisual.font_size = size * self.font_scale_factor
-        self._rectagles_visual.h = size * 1.5
+        self._rectagles_visual.h = size * 1.5 * self.rectangles_scale_factor
 
     @property
     def pos(self):
-        return self._textvisual.pos
+        return self._textvisual.pos, self._rectagles_visual.pos
 
     @pos.setter
-    def pos(self, pos: tuple):
-        self._textvisual.pos = pos
-        if isinstance(pos, tuple):
-            pos_x = [pos[0]]
-            pos_y = [pos[1]]
+    def pos(self, pos: Union[list[tuple], tuple]):
+        # bring arguments to correct shape
+        if isinstance(pos, list):
+            # subtract 0.5 from y to center the text
+            pos_text = [(p[0], p[1] + 0.5) for p in pos]
         else:
-            pos_x = [p[0] for p in pos]
-            pos_y = [p[1] for p in pos]
-        self._rectagles_visual.x = pos_x
-        self._rectagles_visual.y = pos_y
+            pos_text = (pos[0], pos[1] + 0.5)
+
+        self._textvisual.pos = pos_text
+        self._rectagles_visual.pos = pos
 
     @property
     def text(self):
@@ -315,6 +393,39 @@ class TextWithBoxVisual(Compound):
     def layer_widths(self, coords: list):
         w = [coord[0] for coord in coords]
         self._rectagles_visual.w = w
+        self.update_outline()
+
+    @property
+    def show_background(self):
+        return self._rectagles_visual.visible
+
+    @show_background.setter
+    def show_background(self, show: bool):
+        self._rectagles_visual.visible = show
+
+    @property
+    def outline_color(self):
+        return self._outline_visual.color
+
+    @outline_color.setter
+    def outline_color(self, color: str):
+        self._outline_visual.set_data(color=color)
+
+    @property
+    def outline_thickness(self):
+        return self._outline_visual.width
+
+    @outline_thickness.setter
+    def outline_thickness(self, width: float):
+        self._outline_visual.set_data(width=width)
+
+    @property
+    def show_outline(self):
+        return self._outline_visual.visible
+
+    @show_outline.setter
+    def show_outline(self, show: bool):
+        self._outline_visual.visible = show
 
     def update_data(
         self,
@@ -333,11 +444,14 @@ class TextWithBoxVisual(Compound):
             pos_x = [p[0] for p in pos]
             pos_y = [p[1] for p in pos]
 
-        self._textvisual.text = text
-        self._textvisual.color = color
-        self._textvisual.font_size = font_size * self.font_scale_factor
+        self.text = text
+        self.color = color
+        self.font_size = font_size
         self._textvisual.pos = pos
+        height = [font_size * 1.5 * self.rectangles_scale_factor] * len(pos_y)
 
         self._rectagles_visual.update_rects(
-            pos_x, pos_y, box_width, [font_size * 1.5] * len(pos_y), bgcolor
+            pos_x, pos_y, box_width, height, bgcolor
         )
+        self.update_outline()
+        self.outline_thickness = 2
