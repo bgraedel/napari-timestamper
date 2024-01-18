@@ -102,7 +102,7 @@ def render_as_rgb(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with CameraSetter(viewer, upsample_factor, size) as setter:
-            if axis is not None:
+            if axis:
                 # calculate array output size
                 arr_out_size = [len(np.arange(*r)) for r in viewer.dims.range]
                 arr_out_size[-2:] = (
