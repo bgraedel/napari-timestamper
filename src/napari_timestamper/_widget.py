@@ -974,6 +974,8 @@ class LayertoRGBWidget(QWidget):
                 )
 
         ax = [idx for idx, ax in enumerate(self.viewer.dims.range[:-2])]
+        if len(ax) == 0:
+            ax = None
         # loop over all axis
         try:
             rendered_image = render_as_rgb(self.viewer, ax, None)
