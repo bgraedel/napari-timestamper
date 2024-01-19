@@ -44,9 +44,7 @@ def layer_to_rgb_widget(qtbot):
     widget = LayertoRGBWidget(viewer)
     qtbot.addWidget(widget)
     viewer.window.add_dock_widget(widget)
-    yield widget, viewer, qtbot
-    widget.close()
-    viewer.close()
+    return widget, viewer, qtbot
 
 
 def test_initial_values(timestamp_options):
@@ -182,7 +180,6 @@ def test_layer_to_rgb_widget_single(render_rgb_widget):
 
 
 def test_convert_layer_to_rgb(layer_to_rgb_widget):
-    # viewer = napari.Viewer()
     widget, viewer, qtbot = layer_to_rgb_widget
     viewer.add_image(np.random.random((10, 10, 10)))
     for i in range(widget.layer_selector.count()):
@@ -192,3 +189,4 @@ def test_convert_layer_to_rgb(layer_to_rgb_widget):
         widget.render_button.click()
     assert viewer.layers[1].name == widget.name_lineedit.text()
     assert viewer.layers[1].data.shape == (10, 10, 10, 3)
+    viewer.close()
