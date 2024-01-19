@@ -1,7 +1,6 @@
 import tempfile
 from pathlib import Path
 
-import napari
 import numpy as np
 import pytest
 from qtpy import QtCore
@@ -39,11 +38,10 @@ def render_rgb_widget(make_napari_viewer, qtbot):
 
 
 @pytest.fixture
-def layer_to_rgb_widget(qtbot):
-    viewer = napari.Viewer()
+def layer_to_rgb_widget(make_napari_viewer, qtbot):
+    viewer = make_napari_viewer()
     widget = LayertoRGBWidget(viewer)
     qtbot.addWidget(widget)
-    qtbot.addWidget(viewer.window.qt_viewer)
     viewer.window.add_dock_widget(widget)
     return widget, viewer, qtbot
 
@@ -182,11 +180,11 @@ def test_layer_to_rgb_widget_single(render_rgb_widget):
 
 def test_convert_layer_to_rgb(layer_to_rgb_widget):
     widget, viewer, qtbot = layer_to_rgb_widget
-    viewer.add_image(np.random.random((10, 10, 10)))
+    viewer.add_image(np.random.random((10, 800, 800)))
     for i in range(widget.layer_selector.count()):
         widget.layer_selector.item(i).setCheckState(QtCore.Qt.Checked)
 
     with qtbot.waitSignal(viewer.layers.events.inserted):
         widget.render_button.click()
     assert viewer.layers[1].name == widget.name_lineedit.text()
-    assert viewer.layers[1].data.shape == (10, 10, 10, 3)
+    assert viewer.layers[1].data.shape == (10, 800, 800, 3)
