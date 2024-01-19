@@ -454,4 +454,3 @@ class TextWithBoxVisual(Compound):
             pos_x, pos_y, box_width, height, bgcolor
         )
         self.update_outline()
-        self.outline_thickness = 2

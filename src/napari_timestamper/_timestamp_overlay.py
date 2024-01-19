@@ -16,10 +16,10 @@ from typing import Union
 
 from napari._vispy.overlays.base import (
     ViewerOverlayMixin,
-    VispyCanvasOverlay,
+    VispySceneOverlay,
 )
 from napari.components._viewer_constants import CanvasPosition
-from napari.components.overlays import CanvasOverlay
+from napari.components.overlays import SceneOverlay
 from napari.utils.color import ColorValue
 from napari.utils.events import disconnect_events
 from vispy.color import ColorArray
@@ -29,7 +29,7 @@ from napari_timestamper.text_visual import TextWithBoxVisual
 from napari_timestamper.utils import _find_grid_offsets
 
 
-class TimestampOverlay(CanvasOverlay):
+class TimestampOverlay(SceneOverlay):
     """
     Timestamp Overlay.
     """
@@ -157,7 +157,7 @@ class TimestampOverlay(CanvasOverlay):
         return self._timestamp_string()
 
 
-class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
+class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
     """
     Vispy Timestamp Overlay.
     """
@@ -206,6 +206,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         self.overlay.events.display_on_scene.connect(self._on_position_change)
         self.viewer.dims.events.current_step.connect(self._on_time_change)
         self.viewer.camera.events.zoom.connect(self._on_viewer_zoom_change)
+        self.viewer.dims.events.ndisplay.connect(self._on_text_change)
         self.node.events.parent_change.connect(self._on_parent_change)
         self.reset()
 
@@ -225,6 +226,9 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         if event.new is not None and self.node.canvas is not None:
             # connect the canvas resize to recalculating the position
             event.new.canvas.events.resize.connect(self._on_position_change)
+
+        self._on_viewer_zoom_change()
+        self._on_text_change()
 
     def _on_viewer_zoom_change(self, event=None):
         """
@@ -375,12 +379,17 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispyCanvasOverlay):
         """
         Callback function for when the text of the overlay is changed.
         """
+        if self.viewer.dims.ndisplay == 3 and self.overlay.display_on_scene:
+            self.node.show_background = False
+            self.node.show_outline = False
+        else:
+            self.node.show_background = self.overlay.show_background
+            self.node.show_outline = self.overlay.show_outline
+
         self.node.text = self.overlay.text
         self.node.bold = self.overlay.bold
         self.node.italic = self.overlay.italic
         self.node.bgcolor = self.overlay.bg_color.rgba.tolist()
-        self.node.show_background = self.overlay.show_background
-        self.node.show_outline = self.overlay.show_outline
         self.node.outline_color = self.overlay.outline_color.rgba.tolist()
         self.node.outline_thickness = self.overlay.outline_thickness
 

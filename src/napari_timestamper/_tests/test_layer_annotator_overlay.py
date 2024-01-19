@@ -1,6 +1,8 @@
+import warnings
 from unittest.mock import patch
 
 import pytest
+from napari._vispy.utils.visual import overlay_to_visual
 from numpy.testing import assert_allclose
 from vispy.color import ColorArray
 
@@ -88,3 +90,24 @@ def test_reset(vispy_overlay):
     mock_position_change.assert_called_once()
     mock_zoom_change.assert_called_once()
     mock_update_annotations.assert_called_once()
+
+
+def test_add_overlay_to_viewer(make_napari_viewer):
+    viewer = make_napari_viewer()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            viewer._overlays["LayerAnnotator"]
+        except KeyError:
+            viewer._overlays["LayerAnnotator"] = LayerAnnotatorOverlay(
+                visible=True
+            )
+            overlay_to_visual[
+                LayerAnnotatorOverlay
+            ] = VispyLayerAnnotatorOverlay
+            viewer.window._qt_viewer._add_overlay(
+                viewer._overlays["LayerAnnotator"]
+            )
+        layer_annotator_overlay = viewer._overlays["LayerAnnotator"]
+
+    assert isinstance(layer_annotator_overlay, LayerAnnotatorOverlay)

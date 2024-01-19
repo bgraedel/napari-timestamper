@@ -1,7 +1,17 @@
+import tempfile
+from pathlib import Path
+
+import napari
+import numpy as np
 import pytest
 from qtpy import QtCore
 
-from napari_timestamper._widget import LayerAnnotationsWidget, TimestampWidget
+from napari_timestamper._widget import (
+    LayerAnnotationsWidget,
+    LayertoRGBWidget,
+    RenderRGBWidget,
+    TimestampWidget,
+)
 
 
 @pytest.fixture
@@ -18,6 +28,25 @@ def layer_annotations_widget(make_napari_viewer, qtbot):
     widget = LayerAnnotationsWidget(viewer)
     viewer.window.add_dock_widget(widget)
     return widget
+
+
+@pytest.fixture
+def render_rgb_widget(make_napari_viewer, qtbot):
+    viewer = make_napari_viewer()
+    widget = RenderRGBWidget(viewer)
+    viewer.window.add_dock_widget(widget)
+    return widget, viewer
+
+
+@pytest.fixture
+def layer_to_rgb_widget(qtbot):
+    viewer = napari.Viewer()
+    widget = LayertoRGBWidget(viewer)
+    qtbot.addWidget(widget)
+    viewer.window.add_dock_widget(widget)
+    yield widget, viewer, qtbot
+    widget.close()
+    viewer.close()
 
 
 def test_initial_values(timestamp_options):
@@ -115,3 +144,51 @@ def test_on_toggle_visibility(layer_annotations_widget, qtbot):
     widget.toggle_visibility_button.click()
     assert widget.toggle_visibility_button.isChecked() is not initial_value
     assert widget.layer_annotator_overlay.visible is not initial_value
+
+
+def test_layer_to_rgb_widget(render_rgb_widget):
+    widget, viewer = render_rgb_widget
+    viewer.add_image(np.random.random((10, 10, 10)))
+    # create a temporary directory
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        widget.directory = Path(tmpdirname)
+        widget.axis_combobox.setCurrentIndex(1)
+        widget.export_type_combobox.setCurrentText("png")
+        widget.render_button.click()
+        assert widget.directory.exists()
+        assert (
+            len(
+                list(
+                    widget.directory.joinpath(
+                        widget.name_lineedit.text()
+                    ).glob("*.png")
+                )
+            )
+            == 10
+        )
+
+
+def test_layer_to_rgb_widget_single(render_rgb_widget):
+    widget, viewer = render_rgb_widget
+    viewer.add_image(np.random.random((10, 10, 10)))
+    # create a temporary directory
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        widget.directory = Path(tmpdirname)
+        widget.axis_combobox.setCurrentIndex(0)
+        widget.export_type_combobox.setCurrentText("png")
+        widget.render_button.click()
+        assert widget.directory.exists()
+        assert len(list(widget.directory.glob("*.png"))) == 1
+
+
+def test_convert_layer_to_rgb(layer_to_rgb_widget):
+    # viewer = napari.Viewer()
+    widget, viewer, qtbot = layer_to_rgb_widget
+    viewer.add_image(np.random.random((10, 10, 10)))
+    for i in range(widget.layer_selector.count()):
+        widget.layer_selector.item(i).setCheckState(QtCore.Qt.Checked)
+
+    with qtbot.waitSignal(viewer.layers.events.inserted):
+        widget.render_button.click()
+    assert viewer.layers[1].name == widget.name_lineedit.text()
+    assert viewer.layers[1].data.shape == (10, 10, 10, 3)

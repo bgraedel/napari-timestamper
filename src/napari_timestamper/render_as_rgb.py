@@ -95,14 +95,14 @@ def render_as_rgb(
     upsample_factor: int = 1,
 ):
     """Render the viewer for a single timepoint."""
-    try:
-        iter(axis)  # check if axis is iterable
-    except TypeError:
-        axis = [axis]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         with CameraSetter(viewer, upsample_factor, size) as setter:
-            if axis:
+            if axis is not None:
+                try:
+                    iter(axis)  # check if axis is iterable
+                except TypeError:
+                    axis = [axis]
                 # calculate array output size
                 arr_out_size = [len(np.arange(*r)) for r in viewer.dims.range]
                 arr_out_size[-2:] = (
@@ -139,9 +139,7 @@ def render_as_rgb(
                             rgb[ax, j] = rendered_img
 
             else:
-                rendered_img = viewer.window.qt_viewer.canvas.render(
-                    alpha=False
-                )
+                rgb = viewer.window.qt_viewer.canvas.render(alpha=False)
     return rgb
 
 
@@ -164,7 +162,7 @@ def save_image_stack(
             ) from e
 
         if image.ndim == 3:
-            raise ValueError("Mp4 export only works for 4D data")
+            raise ValueError("Mp4 export only works for 3D+ data")
 
         # Read the first image to get the width, height
         frame = image[0]
@@ -194,7 +192,7 @@ def save_image_stack(
                 "You must install imageio to export as gif, try `pip install imageio`"
             ) from e
         if image.ndim == 3:
-            raise ValueError("Gif export only works for 4D data")
+            raise ValueError("Gif export only works for 3D+ data")
         imageio.mimsave(outpath, image, duration=1000 * 1 / fps)
 
     elif output_type in ["png", "jpeg"]:

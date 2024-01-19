@@ -1,12 +1,12 @@
 """
-This module contains the TimestampOverlay class and the VispyTimestampOverlay class.
+This module contains the LayerAnnotatorOverlay and VispyLayerAnnotatorOverlay classes.
 
-The TimestampOverlay class is a canvas overlay that displays a timestamp on a napari viewer.
-It has several customizable properties such as color, size, prefix, suffix, time, start_time, step_size,
-time_format, y_position_offset, x_position_offset, and time_axis.
-
-The VispyTimestampOverlay class is a vispy canvas overlay that displays the TimestampOverlay on a napari viewer.
-It inherits from the ViewerOverlayMixin and VispyCanvasOverlay classes.
+The LayerAnnotatorOverlay class is the napari layer annotator overlay. It contains the
+properties of the overlay. The VispyLayerAnnotatorOverlay class is the vispy layer
+annotator overlay. It contains the functionality of the overlay
+and the vispy visual that is drawn in the canvas. The vispy visual is a TextWithBoxVisual
+that contains the text and box visuals that are drawn in the canvas
+and the properties of the visuals.
 
 This structure is adapted from the napari dev example.
 """
@@ -14,7 +14,6 @@ import contextlib
 from collections import defaultdict
 from typing import Literal
 
-import numpy as np
 from napari._vispy.overlays.base import ViewerOverlayMixin, VispySceneOverlay
 from napari.components.overlays import SceneOverlay
 from napari.layers import Image, labels
@@ -134,6 +133,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.viewer.grid.events.shape.connect(self._update_annotations)
         self.viewer.grid.events.stride.connect(self._update_annotations)
         self.viewer.grid.events.enabled.connect(self._update_annotations)
+        self.viewer.dims.events.ndisplay.connect(self._on_property_change)
 
         self.reset()
         self._connect_iniial_layers()
@@ -341,13 +341,18 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         """
         Callback function for when properties of the overlay are changed.
         """
+        if self.viewer.dims.ndisplay == 3:
+            self.node.show_outline = False
+            self.node._rectagles_visual.visible = False
+        else:
+            self.node.show_outline = self.overlay.show_outline
+            self.node._rectagles_visual.visible = self.overlay.show_background
+
         self.node.text = self.overlay.layers_to_annotate["layer_names"]
         self.node.bold = self.overlay.bold
         self.node.italic = self.overlay.italic
-        self.node._rectagles_visual.visible = self.overlay.show_background
         self.node.outline_color = self.overlay.outline_color
         self.node.outline_thickness = self.overlay.outline_thickness
-        self.node.show_outline = self.overlay.show_outline
         self.node.bgcolor = self.overlay.bg_color.rgba.tolist()
         if self.overlay.use_layer_color:
             self.node.color = self.overlay.layers_to_annotate["colors"]
@@ -365,16 +370,3 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self._on_position_change()
         self._on_viewer_zoom_change()
         self._update_annotations()
-
-
-if __name__ == "__main__":
-    import napari
-
-    viewer = napari.Viewer()
-    viewer.window.add_plugin_dock_widget("napari-timestamper", "Timestamper")
-
-    viewer.add_image(np.random.random((100, 100, 100)))
-    viewer.add_image(np.random.random((100, 100, 100)))
-
-    # viewer.window.add_plugin_dock_widget("napari-timestamper", 'Layer Annotations')
-    napari.run()

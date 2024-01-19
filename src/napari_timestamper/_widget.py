@@ -565,6 +565,7 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
 
         # Adding Widgets to Layout
         self.gridLayout.addWidget(self.outline_size_label, 9, 0)
+        self.gridLayout.addWidget(self.outline_size, 9, 1)
 
         self.spacer = QtWidgets.QSpacerItem(
             20,
@@ -779,6 +780,9 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         )
         self.outline_color.clicked.connect(self._open_outline_color_dialog)
         self.outline_color.clicked.connect(
+            self._set_layer_annotator_overlay_options
+        )
+        self.outline_size.valueChanged.connect(
             self._set_layer_annotator_overlay_options
         )
 
