@@ -43,6 +43,7 @@ def layer_to_rgb_widget(qtbot):
     viewer = napari.Viewer()
     widget = LayertoRGBWidget(viewer)
     qtbot.addWidget(widget)
+    qtbot.addWidget(viewer.window.qt_viewer)
     viewer.window.add_dock_widget(widget)
     return widget, viewer, qtbot
 
