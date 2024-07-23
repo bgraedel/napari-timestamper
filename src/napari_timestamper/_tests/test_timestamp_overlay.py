@@ -25,7 +25,7 @@ def test_text_instantiation(make_napari_viewer):
         except KeyError:
             viewer._overlays["timestamp"] = TimestampOverlay(visible=True)
             overlay_to_visual[TimestampOverlay] = VispyTimestampOverlay
-            viewer.window._qt_viewer._add_overlay(
+            viewer.window._qt_viewer.canvas._add_overlay_to_visual(
                 viewer._overlays["timestamp"]
             )
         timestamp_overlay = viewer._overlays["timestamp"]

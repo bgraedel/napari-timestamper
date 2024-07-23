@@ -9,147 +9,90 @@ import numpy as np
 from skimage import io
 
 
-class CameraSetter:
-    """A context manager to adjust viewer camera settings before rendering."""
-
-    def __init__(
-        self, viewer, upsample_factor=1, size: tuple(int, int) | None = None
-    ):
-        self.viewer = viewer
-        # get initial settings
-        self.center = viewer.camera.center
-        self.zoom = viewer.camera.zoom
-        self.angles = viewer.camera.angles
-
-        self.input_canvas_size = viewer.window.qt_viewer.canvas.size
-
-        extent = viewer._sliced_extent_world[:, -2:]
-        scene_size = (
-            (extent[1] - extent[0])
-            / viewer.window.qt_viewer.canvas.pixel_scale
-            * upsample_factor
-        )  # adjust for pixel scaling
-        grid_size = list(viewer.grid.actual_shape(len(viewer.layers)))
-
-        # Adjust grid_size if necessary
-        if len(scene_size) > len(grid_size):
-            grid_size = [1] * (len(scene_size) - len(grid_size)) + grid_size
-
-        # calculate target size i.e the size the canvas should be to fit the whole scene
-        if size is None:
-            self.target_size = tuple(
-                (scene_size[::-1] * grid_size[::-1]).astype(int)
-            )
-        else:
-            self.target_size = size
-        self.center = viewer.camera.center
-        self.zoom = viewer.camera.zoom
-        self.angles = viewer.camera.angles
-
-    # copied from viewer.reset_view and modified without padding
-    def _center_on_canvas(self):
-        """Reset the camera view."""
-        extent = self.viewer._sliced_extent_world
-        scene_size = extent[1] - extent[0]
-        corner = extent[0]
-        grid_size = list(
-            self.viewer.grid.actual_shape(len(self.viewer.layers))
-        )
-        if len(scene_size) > len(grid_size):
-            grid_size = [1] * (len(scene_size) - len(grid_size)) + grid_size
-        size = np.multiply(scene_size, grid_size)
-        center = np.add(corner, np.divide(size, 2))[
-            -self.viewer.dims.ndisplay :
-        ]
-        center = [0] * (self.viewer.dims.ndisplay - len(center)) + list(center)
-        self.viewer.camera.center = center
-
-        if np.max(size) == 0:
-            self.viewer.camera.zoom = np.min(self.viewer._canvas_size)
-        else:
-            scale = np.array(size[-2:])
-            scale[np.isclose(scale, 0)] = 1
-            self.viewer.camera.zoom = 1 * np.min(
-                np.array(self.viewer._canvas_size) / scale
-            )
-        self.viewer.camera.angles = (0, 0, 90)
-
-    def __enter__(self):
-        """Set up the viewer for rendering."""
-        self.viewer.window.qt_viewer.canvas.size = self.target_size
-        self._center_on_canvas()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Reset the viewer after rendering."""
-        self.viewer.window.qt_viewer.canvas.size = self.input_canvas_size
-        self.viewer.camera.center = self.center
-        self.viewer.camera.zoom = self.zoom
-        self.viewer.camera.angles = self.angles
-
-
 def render_as_rgb(
     viewer: napari.Viewer,
     axis: Optional[Union[int, list, np.array]] = None,
-    size: tuple(int, int) | None = None,
     upsample_factor: int = 1,
+    **kwargs,
 ):
-    """Render the viewer for a single timepoint."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        with CameraSetter(viewer, upsample_factor, size) as setter:
-            if axis is not None:
-                try:
-                    iter(axis)  # check if axis is iterable
-                except TypeError:
-                    axis = [axis]
-                # calculate array output size
-                arr_out_size = [len(np.arange(*r)) for r in viewer.dims.range]
-                arr_out_size[-2:] = (
-                    np.array(setter.target_size)[::-1]
-                    * viewer.window.qt_viewer.canvas.pixel_scale
+    """Render the viewer for a single timepoint or for a timelapse along specified axis."""
+    size = kwargs.pop("size", None)
+    if size:
+        warnings.warn(
+            "The size parameter is deprecated and will be removed in a future release. "
+            "Please use the upsample_factor parameter instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    if axis is not None:
+        try:
+            iter(axis)  # check if axis is iterable
+        except TypeError:
+            axis = [axis]
+        if len(axis) == 1:
+            axis = axis[0]
+            target_shape = viewer.export_figure(
+                scale_factor=upsample_factor, flash=False
+            ).shape
+            rgb = np.zeros(
+                (viewer.dims.range[axis][1].astype(int) + 1, *target_shape),
+                dtype=np.uint8,
+            )
+            for j in range(viewer.dims.range[axis][1].astype(int) + 1):
+                viewer.dims.set_current_step(axis, j)
+                rendered_img = viewer.export_figure(
+                    scale_factor=upsample_factor, flash=False
                 )
-                # convert to int
-                arr_out_size = [int(i) for i in arr_out_size]
-                # create an empty array matching the size of the expected output
-                rgb = np.zeros(
-                    (
-                        *tuple(arr_out_size),
-                        3,
-                    ),
-                    dtype=np.uint8,
-                )
-                if len(axis) == 1:
-                    axis = axis[0]
-                    for j in range(viewer.dims.range[axis][1].astype(int)):
-                        viewer.dims.set_current_step(axis, j)
-                        rendered_img = viewer.window.qt_viewer.canvas.render(
-                            alpha=False
-                        )
-                        rgb[j] = rendered_img
-                else:
-                    for ax in axis:
-                        for j in range(viewer.dims.range[ax][1].astype(int)):
-                            viewer.dims.set_current_step(ax, j)
-                            rendered_img = (
-                                viewer.window.qt_viewer.canvas.render(
-                                    alpha=False
-                                )
-                            )
-                            rgb[ax, j] = rendered_img
+                rgb[j] = rendered_img
+        else:
+            target_shape = viewer.export_figure(
+                scale_factor=upsample_factor, flash=False
+            ).shape
+            rgb = np.zeros(
+                (
+                    len(axis),
+                    viewer.dims.range[axis[0]][1].astype(int) + 1,
+                    *target_shape,
+                ),
+                dtype=np.uint8,
+            )
+            for ax in axis:
+                for j in range(viewer.dims.range[ax][1].astype(int) + 1):
+                    viewer.dims.set_current_step(ax, j)
+                    rendered_img = viewer.export_figure(
+                        scale_factor=upsample_factor, flash=False
+                    )
+                    rgb[ax, j] = rendered_img
 
-            else:
-                rgb = viewer.window.qt_viewer.canvas.render(alpha=False)
+    else:
+        rgb = viewer.export_figure(scale_factor=upsample_factor, flash=False)
     return rgb
 
 
 def save_image_stack(
     image,
-    directory=Path(),
+    directory: Path | str = ".",
     name: str = "out",
     output_type: Literal["tif", "mp4", "gif", "png", "jpeg"] = "mp4",
     fps: int = 12,
 ):
+    """Save an image stack as a tif, mp4, gif, png, or jpeg file.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Image stack to save.
+    directory : Path | str, optional
+        Directory to save the image stack, by default Path.cwd()
+    name : str, optional
+        Name of the file to save, by default "out"
+    output_type : Literal["tif", "mp4", "gif", "png", "jpeg"], optional
+        Type of file to save, by default "mp4"
+    fps : int, optional
+        Frames per second for mp4 and gif files, by default 12
+    """
+    if isinstance(directory, str):
+        directory = Path(directory)
     outpath = directory.joinpath(f"{name}.{output_type}").as_posix()
     if output_type == "tif":
         io.imsave(outpath, image)
@@ -166,7 +109,7 @@ def save_image_stack(
 
         # Read the first image to get the width, height
         frame = image[0]
-        h, w, layers = frame.shape
+        h, w, _ = frame.shape
 
         # Define the codec and create a VideoWriter object
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
