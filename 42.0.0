@@ -1,0 +1,10 @@
+Requirement already satisfied: setuptools in c:\users\benig\documents\python_dev\napari-timestamper\.tox\.package\lib\site-packages (71.0.4)
+Requirement already satisfied: wheel in c:\users\benig\documents\python_dev\napari-timestamper\.tox\.package\lib\site-packages (0.43.0)
+Collecting setuptools_scm
+  Using cached setuptools_scm-8.1.0-py3-none-any.whl.metadata (6.6 kB)
+Collecting packaging>=20 (from setuptools_scm)
+  Using cached packaging-24.1-py3-none-any.whl.metadata (3.2 kB)
+Using cached setuptools_scm-8.1.0-py3-none-any.whl (43 kB)
+Using cached packaging-24.1-py3-none-any.whl (53 kB)
+Installing collected packages: packaging, setuptools_scm
+Successfully installed packaging-24.1 setuptools_scm-8.1.0
