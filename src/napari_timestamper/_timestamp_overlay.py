@@ -174,8 +174,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
             overlay=overlay,
             parent=parent,
         )
-        self.y_spacer = overlay.y_spacer
-        self.x_spacer = overlay.x_spacer
+        self.y_spacer = self.overlay.y_spacer
+        self.x_spacer = self.overlay.x_spacer
         self.x_size = 0
         self.y_size = 0
         self.camera_scaling_factor = 1

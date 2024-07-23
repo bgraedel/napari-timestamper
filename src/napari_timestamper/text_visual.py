@@ -89,20 +89,20 @@ class MultiRectVisual(Mesh):
 
         # Calculate the horizontal offset
         if self.anchor_x == "right":
-            dx = +width + 0.5 - self.spacer
+            dx = +width - self.spacer
         elif self.anchor_x == "center":
-            dx = +width / 2 + 0.5
+            dx = +width / 2
         elif self.anchor_x == "left":
-            dx = 0.5 + self.spacer
+            dx = self.spacer
 
         # Calculate the vertical offset
         # Assuming that for rectangles, 'top' and 'bottom' relate to the actual top and bottom edges
         if self.anchor_y in ("top"):
-            dy = +height + 0.5
+            dy = +height
         elif self.anchor_y in ("center", "middle"):
-            dy = +height / 2 + 0.5
+            dy = +height / 2
         elif self.anchor_y in ("baseline", "bottom"):
-            dy = +0.5
+            dy = 0
 
         return dx, dy
 

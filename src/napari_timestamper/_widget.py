@@ -12,8 +12,8 @@ from napari.components._viewer_constants import CanvasPosition
 from qtpy import QtCore, QtGui, QtWidgets
 from qtpy.QtCore import Slot
 from qtpy.QtWidgets import (
-    QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QLabel,
     QLineEdit,
@@ -83,7 +83,7 @@ class TimestampWidget(QtWidgets.QWidget):
                     visible=True
                 )
                 overlay_to_visual[TimestampOverlay] = VispyTimestampOverlay
-                self.viewer.window._qt_viewer._add_overlay(
+                self.viewer.window._qt_viewer.canvas._add_overlay_to_visual(
                     self.viewer._overlays["timestamp"]
                 )
             self.timestamp_overlay = self.viewer._overlays["timestamp"]
@@ -439,7 +439,7 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
                 overlay_to_visual[
                     LayerAnnotatorOverlay
                 ] = VispyLayerAnnotatorOverlay
-                self.viewer.window._qt_viewer._add_overlay(
+                self.viewer.window._qt_viewer.canvas._add_overlay_to_visual(
                     self.viewer._overlays["LayerAnnotator"]
                 )
             self.layer_annotator_overlay = self.viewer._overlays[
@@ -495,7 +495,9 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         self.gridLayout.addWidget(self.toggle_visibility_button, 10, 0, 1, 2)
 
         # Choose wether to use layer color or custom color by ticking the checkbox
-        self.color_checkbox = QtWidgets.QCheckBox("Use Layer Color")
+        self.color_checkbox = QtWidgets.QCheckBox(
+            "Use Colormap for Image Layers"
+        )
         self.color_checkbox.setChecked(True)
         self.gridLayout.addWidget(self.color_checkbox, 4, 0)
 
@@ -601,10 +603,7 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
         Slot function to handle changes in the color combobox.
         """
         if self.color_checkbox.isChecked():
-            self.color.setEnabled(False)
-            self._update_color_button_icon(
-                self.color, "grey"
-            )  # Update button icon
+            self._update_color_button_icon(self.color, self.chosen_color)
             self.layer_annotator_overlay.use_layer_color = True
 
         else:
@@ -823,26 +822,22 @@ class RenderRGBWidget(QWidget):
         self.name_lineedit.setText("output")
         self.layout.addWidget(self.name_lineedit)
 
-        self.size_checkbox = QCheckBox("Export at specified size", self)
-        self.layout.addWidget(self.size_checkbox)
+        self.scale_label = QLabel("Scale Factor:", self)
+        self.layout.addWidget(self.scale_label)
 
-        self.output_size_label = QLabel("Output Size:", self)
-        self.layout.addWidget(self.output_size_label)
+        self.scale_spinbox = QDoubleSpinBox(self)
+        self.scale_spinbox.setRange(0, 100)
+        self.scale_spinbox.setValue(1)
 
-        self.output_size_layout = QtWidgets.QHBoxLayout()
-        self.y_size_spinbox = QSpinBox(self)
-        self.y_size_spinbox.setEnabled(False)
-        self.y_size_spinbox.setMaximum(10000)
-        self.y_size_spinbox.setValue(512)
-        self.output_size_layout.addWidget(self.y_size_spinbox)
+        self.layout.addWidget(self.scale_spinbox)
 
-        self.x_size_spinbox = QSpinBox(self)
-        self.x_size_spinbox.setEnabled(False)
-        self.x_size_spinbox.setMaximum(10000)
-        self.x_size_spinbox.setValue(512)
-        self.output_size_layout.addWidget(self.x_size_spinbox)
+        self.frame_interval = QLabel("FPS:", self)
+        self.layout.addWidget(self.frame_interval)
 
-        self.layout.addLayout(self.output_size_layout)
+        self.frame_interval_spinbox = QSpinBox(self)
+        self.frame_interval_spinbox.setRange(1, 1000)
+        self.frame_interval_spinbox.setValue(10)
+        self.layout.addWidget(self.frame_interval_spinbox)
 
         self.render_button = QPushButton("Render and Save", self)
         self.layout.addWidget(self.render_button)
@@ -864,8 +859,6 @@ class RenderRGBWidget(QWidget):
         self.viewer.layers.events.inserted.connect(self.update_axis_combobox)
         self.viewer.layers.events.removed.connect(self.update_axis_combobox)
         self.filepath_button.clicked.connect(self.on_filepath_button_clicked)
-        self.size_checkbox.toggled.connect(self.y_size_spinbox.setEnabled)
-        self.size_checkbox.toggled.connect(self.x_size_spinbox.setEnabled)
         self.render_button.clicked.connect(self.on_render_button_clicked)
 
     def update_axis_combobox(self):
@@ -886,19 +879,17 @@ class RenderRGBWidget(QWidget):
 
     @Slot()
     def on_render_button_clicked(self):
-        size = (
-            (self.y_size_spinbox.value(), self.x_size_spinbox.value())
-            if self.size_checkbox.isChecked()
-            else None
-        )
         rendered_image = render_as_rgb(
-            self.viewer, self.axis_combobox.currentData(), size
+            self.viewer,
+            self.axis_combobox.currentData(),
+            upsample_factor=self.scale_spinbox.value(),
         )
         save_image_stack(
             rendered_image,
             self.directory,
             self.name_lineedit.text(),
             self.export_type_combobox.currentText(),
+            self.frame_interval_spinbox.value(),
         )
 
 
@@ -978,7 +969,7 @@ class LayertoRGBWidget(QWidget):
             ax = None
         # loop over all axis
         try:
-            rendered_image = render_as_rgb(self.viewer, ax, None)
+            rendered_image = render_as_rgb(self.viewer, ax, 1)
         finally:
             for layer_idx, layer in temporary_removed_layers.items():
                 self.viewer.layers.insert(layer_idx, layer)

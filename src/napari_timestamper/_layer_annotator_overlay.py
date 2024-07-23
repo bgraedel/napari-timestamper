@@ -83,6 +83,7 @@ class LayerAnnotatorOverlay(SceneOverlay):
     }
 
 
+# probably should make this as a layer overlay.... no time at the moment tho :(
 class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
     """
     Vispy Timestamp Overlay.
@@ -182,14 +183,14 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             if layer.visible:
                 layers_to_annotate["layer_names"].append(layer.name)
                 if isinstance(layer, labels.Labels):
-                    layers_to_annotate["colors"].append("white")
+                    layers_to_annotate["colors"].append(self.overlay.color)
                 else:
                     try:
                         layers_to_annotate["colors"].append(
                             layer.colormap.colors[-1]
                         )
                     except AttributeError:
-                        layers_to_annotate["colors"].append("white")
+                        layers_to_annotate["colors"].append(self.overlay.color)
 
                 # Update offsets based on grid position
                 grid_offset = layer_translations[i]
@@ -341,6 +342,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         """
         Callback function for when properties of the overlay are changed.
         """
+        self._update_annotations()
         if self.viewer.dims.ndisplay == 3:
             self.node.show_outline = False
             self.node._rectagles_visual.visible = False

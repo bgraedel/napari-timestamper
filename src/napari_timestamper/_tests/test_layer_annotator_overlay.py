@@ -1,6 +1,7 @@
 import warnings
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 from napari._vispy.utils.visual import overlay_to_visual
 from numpy.testing import assert_allclose
@@ -65,7 +66,9 @@ def test_on_size_change(vispy_overlay):
 
 
 def test_on_property_change(vispy_overlay):
-    vispy_overlay.overlay.layers_to_annotate["layer_names"] = ["Layer1"]
+    vispy_overlay.viewer.add_image(np.random.random((10, 10)), name="Layer1")
+    # vispy_overlay.overlay.layers_to_annotate["layer_names"] = ["Layer1"]
+    assert vispy_overlay.node.color != ColorArray("red")
     vispy_overlay.overlay.color = "red"
     vispy_overlay._on_property_change()
     assert vispy_overlay.node.text == ["Layer1"]
@@ -105,7 +108,7 @@ def test_add_overlay_to_viewer(make_napari_viewer):
             overlay_to_visual[
                 LayerAnnotatorOverlay
             ] = VispyLayerAnnotatorOverlay
-            viewer.window._qt_viewer._add_overlay(
+            viewer.window._qt_viewer.canvas._add_overlay_to_visual(
                 viewer._overlays["LayerAnnotator"]
             )
         layer_annotator_overlay = viewer._overlays["LayerAnnotator"]

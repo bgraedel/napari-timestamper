@@ -6,7 +6,7 @@ def _find_grid_offsets(viewer):
     Finds the offsets for the grid.
     """
     layer_translations = []
-    extent = viewer._sliced_extent_world
+    extent = viewer._sliced_extent_world_augmented
     n_layers = len(viewer.layers)
     for i, layer in enumerate(viewer.layers):
         i_row, i_column = viewer.grid.position(n_layers - 1 - i, n_layers)

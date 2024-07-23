@@ -187,4 +187,4 @@ def test_convert_layer_to_rgb(layer_to_rgb_widget):
     with qtbot.waitSignal(viewer.layers.events.inserted):
         widget.render_button.click()
     assert viewer.layers[1].name == widget.name_lineedit.text()
-    assert viewer.layers[1].data.shape == (10, 800, 800, 3)
+    assert viewer.layers[1].data.shape == (10, 800, 800, 4)
