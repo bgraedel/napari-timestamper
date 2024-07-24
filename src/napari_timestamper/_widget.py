@@ -183,9 +183,9 @@ class TimestampWidget(QtWidgets.QWidget):
 
         # outline_size
         self.outline_size_label = QtWidgets.QLabel("Outline Size")
-        self.outline_size = QtWidgets.QSpinBox()
+        self.outline_size = QtWidgets.QDoubleSpinBox()
         self.outline_size.setRange(0, 100)
-        self.outline_size.setValue(1)
+        self.outline_size.setValue(0.2)
 
         # add checkbox for bold and italic
         self.bold_checkbox = QtWidgets.QCheckBox("Bold")
@@ -561,9 +561,9 @@ class LayerAnnotationsWidget(QtWidgets.QWidget):
 
         # set outline size
         self.outline_size_label = QtWidgets.QLabel("Outline Size")
-        self.outline_size = QtWidgets.QSpinBox()
+        self.outline_size = QtWidgets.QDoubleSpinBox()
         self.outline_size.setRange(0, 100)
-        self.outline_size.setValue(1)
+        self.outline_size.setValue(0.2)
 
         # Adding Widgets to Layout
         self.gridLayout.addWidget(self.outline_size_label, 9, 0)
@@ -869,6 +869,8 @@ class RenderRGBWidget(QWidget):
             if axis is not None:
                 choices.append(i)
                 self.axis_combobox.addItem(axis, i)
+        if len(choices) > 0:
+            self.axis_combobox.setCurrentIndex(1)
 
     @Slot()
     def on_filepath_button_clicked(self):
@@ -974,3 +976,16 @@ class LayertoRGBWidget(QWidget):
             for layer_idx, layer in temporary_removed_layers.items():
                 self.viewer.layers.insert(layer_idx, layer)
         return rendered_image
+
+
+if __name__ == "__main__":
+    import numpy as np
+
+    viewer = napari.Viewer()
+    widget = LayerAnnotationsWidget(viewer)
+    img1 = np.random.randint(0, 255, (100, 100))
+    img2 = np.random.randint(0, 255, (100, 100))
+    viewer.add_image(img1)
+    viewer.add_image(img2)
+    viewer.window.add_dock_widget(widget, area="right")
+    napari.run()

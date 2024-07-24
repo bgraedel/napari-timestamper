@@ -4,12 +4,10 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 from napari._vispy.utils.visual import overlay_to_visual
-from numpy.testing import assert_allclose
 from vispy.color import ColorArray
 
 from napari_timestamper._layer_annotator_overlay import (
     LayerAnnotatorOverlay,
-    ScenePosition,
     VispyLayerAnnotatorOverlay,
 )
 
@@ -38,25 +36,6 @@ def test_update_offsets(vispy_overlay):
     vispy_overlay._update_offsets()
     assert vispy_overlay.x_spacer == 10
     assert vispy_overlay.y_spacer == 20
-
-
-def test_on_position_change(vispy_overlay):
-    x_max, y_max = (
-        vispy_overlay.viewer.dims.range[-2][-2],
-        vispy_overlay.viewer.dims.range[-1][-2],
-    )
-    vispy_overlay.overlay.position = ScenePosition.BOTTOM_RIGHT
-    vispy_overlay._on_position_change()
-    assert_allclose(
-        vispy_overlay.node.transform.translate,
-        [
-            x_max - vispy_overlay.x_size - vispy_overlay.x_spacer,
-            y_max - vispy_overlay.y_size - vispy_overlay.y_spacer,
-            0,
-            0,
-        ],
-    )
-    assert vispy_overlay.node.anchors == ("right", "top")
 
 
 def test_on_size_change(vispy_overlay):

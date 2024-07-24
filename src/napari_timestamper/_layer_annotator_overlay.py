@@ -243,28 +243,33 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         if position == ScenePosition.TOP_LEFT:
             y_offsets, x_offsets = self.correct_offsets_for_overlap("down")
             anchors = ("left", "bottom")
-            transform = [self.x_spacer, self.y_spacer, 0, 0]
+            transform = [self.x_spacer - 0.5, self.y_spacer - 0.5, 0, 0]
 
         elif position == ScenePosition.TOP_RIGHT:
             y_offsets, x_offsets = self.correct_offsets_for_overlap("down")
             anchors = ("right", "bottom")
             transform = [
-                x_max - self.x_size - self.x_spacer,
-                self.y_spacer,
+                x_max - self.x_size - self.x_spacer + 0.5,
+                self.y_spacer - 0.5,
                 0,
                 0,
             ]
         elif position == ScenePosition.TOP_CENTER:
             y_offsets, x_offsets = self.correct_offsets_for_overlap("down")
-            transform = [x_max / 2 - self.x_size / 2, self.y_spacer, 0, 0]
+            transform = [
+                x_max / 2 - self.x_size / 2,
+                self.y_spacer - 0.5,
+                0,
+                0,
+            ]
             anchors = ("center", "bottom")
 
         elif position == ScenePosition.BOTTOM_RIGHT:
             y_offsets, x_offsets = self.correct_offsets_for_overlap("up")
             anchors = ("right", "top")
             transform = [
-                x_max - self.x_size - self.x_spacer,
-                y_max - self.y_size - self.y_spacer,
+                x_max - self.x_size - self.x_spacer + 0.5,
+                y_max - self.y_size - self.y_spacer + 0.5,
                 0,
                 0,
             ]
@@ -272,8 +277,8 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             y_offsets, x_offsets = self.correct_offsets_for_overlap("up")
             anchors = ("left", "top")
             transform = [
-                self.x_spacer,
-                y_max - self.y_size - self.y_spacer,
+                self.x_spacer - 0.5,
+                y_max - self.y_size - self.y_spacer + 0.5,
                 0,
                 0,
             ]
@@ -282,7 +287,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             anchors = ("center", "top")
             transform = [
                 x_max / 2 - self.x_size / 2,
-                y_max - self.y_size - self.y_spacer,
+                y_max - self.y_size - self.y_spacer + 0.5,
                 0,
                 0,
             ]
@@ -316,16 +321,18 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             if (y, x) in existing_offsets:
                 if movement_direction == "down":
                     y_offsets[idx] += (
-                        1.5
+                        1.75
                         * self.overlay.size
                         * existing_offsets.count((y, x))
                     )
+                    # y_offsets[idx] -= self.overlay.outline_thickness
                 elif movement_direction == "up":
                     y_offsets[idx] -= (
-                        1.50
+                        1.75
                         * self.overlay.size
                         * existing_offsets.count((y, x))
                     )
+                    # y_offsets[idx] += self.overlay.outline_thickness
             existing_offsets.append((y, x))
         return y_offsets, x_offsets
 
@@ -336,13 +343,14 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         # self.node.font_size = self.overlay.size * self.camera_scale_factor
         self.node.font_scale_factor = self.camera_scale_factor
         self.node.font_size = self.overlay.size
+        self.node.outline_thickness = self.overlay.outline_thickness
         self._on_position_change()
 
     def _on_property_change(self, event=None):
         """
         Callback function for when properties of the overlay are changed.
         """
-        self._update_annotations()
+        # self._update_annotations()
         if self.viewer.dims.ndisplay == 3:
             self.node.show_outline = False
             self.node._rectagles_visual.visible = False

@@ -261,8 +261,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 )  # this is a bit ugly and circumvents the overlay system which is not ideal but it works
             else:
                 x_max, y_max = (
-                    self.viewer.dims.range[-2][-2],
-                    self.viewer.dims.range[-1][-2],
+                    self.viewer.dims.range[-2][-2] + 1,
+                    self.viewer.dims.range[-1][-2] + 1,
                 )
                 if self.viewer.grid.enabled:
                     layer_translations = _find_grid_offsets(self.viewer)
@@ -282,41 +282,46 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
         if position == CanvasPosition.TOP_LEFT:
             anchors = ("left", "bottom")
-            transform = [self.x_spacer, self.y_spacer, 0, 0]
+            transform = [self.x_spacer - 0.5, self.y_spacer - 0.5, 0, 0]
 
         elif position == CanvasPosition.TOP_RIGHT:
             anchors = ("right", "bottom")
             transform = [
-                x_max - self.x_size - self.x_spacer,
-                self.y_spacer,
+                x_max - self.x_size - self.x_spacer - 0.5,
+                self.y_spacer - 0.5,
                 0,
                 0,
             ]
         elif position == CanvasPosition.TOP_CENTER:
-            transform = [x_max / 2 - self.x_size / 2, self.y_spacer, 0, 0]
+            transform = [
+                x_max / 2 - self.x_size / 2 - 0.5,
+                self.y_spacer - 0.5,
+                0,
+                0,
+            ]
             anchors = ("center", "bottom")
 
         elif position == CanvasPosition.BOTTOM_RIGHT:
             anchors = ("right", "top")
             transform = [
-                x_max - self.x_size - self.x_spacer,
-                y_max - self.y_size - self.y_spacer,
+                x_max - self.x_size - self.x_spacer - 0.5,
+                y_max - self.y_size - self.y_spacer - 0.5,
                 0,
                 0,
             ]
         elif position == CanvasPosition.BOTTOM_LEFT:
             anchors = ("left", "top")
             transform = [
-                self.x_spacer,
-                y_max - self.y_size - self.y_spacer,
+                self.x_spacer - 0.5,
+                y_max - self.y_size - self.y_spacer - 0.5,
                 0,
                 0,
             ]
         elif position == CanvasPosition.BOTTOM_CENTER:
             anchors = ("center", "top")
             transform = [
-                x_max / 2 - self.x_size / 2,
-                y_max - self.y_size - self.y_spacer,
+                x_max / 2 - self.x_size / 2 - 0.5,
+                y_max - self.y_size - self.y_spacer - 0.5,
                 0,
                 0,
             ]
@@ -345,6 +350,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
             ):
                 self.node.font_scale_factor = self.camera_scaling_factor
                 self.node.font_size = self.overlay.size
+                self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.rectangles_scale_factor = 1
 
             elif (
@@ -353,6 +359,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
             ):
                 self.node.font_scale_factor = 1
                 self.node.font_size = self.overlay.size
+                self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.rectangles_scale_factor = 1
 
             elif (
@@ -363,6 +370,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 self.node.rectangles_scale_factor = (
                     1 / self.camera_scaling_factor
                 )
+                self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.font_size = self.overlay.size
 
             elif (
@@ -371,6 +379,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
             ):
                 self.node.font_scale_factor = self.camera_scaling_factor
                 self.node.rectangles_scale_factor = self.camera_scaling_factor
+                self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.font_size = self.overlay.size
 
         self._on_position_change()
