@@ -19,10 +19,10 @@ uses some private overlay functionality, so may break in the future
 
 ## Demos
 ### Annotate Layers with their respective names and colors
-![](https://github.com/user-attachments/assets/7108a3e1-6bd5-4a55-838f-9359b6f3a78b)
+![layer_annotator](https://github.com/user-attachments/assets/defb1778-eb17-4607-b006-9a9e69154b9d)
 
 ### Annotate Layers with a timestamp
-![](https://github.com/user-attachments/assets/7108a3e1-6bd5-4a55-838f-9359b6f3a78b)
+![timestamp](https://github.com/user-attachments/assets/7108a3e1-6bd5-4a55-838f-9359b6f3a78b)
 
 ----------------------------------
 
