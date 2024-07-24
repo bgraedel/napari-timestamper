@@ -7,8 +7,22 @@
 [![codecov](https://codecov.io/gh/bgraedel/napari-timestamper/branch/main/graph/badge.svg)](https://codecov.io/gh/bgraedel/napari-timestamper)
 <!-- [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-timestamper)](https://napari-hub.org/plugins/napari-timestamper) -->
 
-A simple plugin to add a timestamp overlay to napari
+A collection of useful widgets to annotate images with overlays and export them as rgb images/movies.
+
+With this plugin you can:
+- Annotate Layers with their respective names and colors
+- Annotate Layers with a timestamp
+- Export the annotated layers as an RGB image or a movie
+- Convert Layers to RGB stacks and add them back to the viewer
+
 uses some private overlay functionality, so may break in the future
+
+## Demos
+### Annotate Layers with their respective names and colors
+![](https://github.com/user-attachments/assets/7108a3e1-6bd5-4a55-838f-9359b6f3a78b)
+
+### Annotate Layers with a timestamp
+![](https://github.com/user-attachments/assets/7108a3e1-6bd5-4a55-838f-9359b6f3a78b)
 
 ----------------------------------
 
