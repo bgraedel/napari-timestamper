@@ -4,7 +4,7 @@ from typing import Union
 
 import numpy as np
 from vispy.color import Color
-from vispy.scene.visuals import Compound, Line, Mesh, Text
+from vispy.scene.visuals import Compound, Line, Markers, Mesh, Text
 
 
 class MultiRectVisual(Mesh):
@@ -42,7 +42,7 @@ class MultiRectVisual(Mesh):
 
         self.anchor_x = anchor_x
         self.anchor_y = anchor_y
-        self.spacer = 0
+        self.spacer = 10
 
         self.rect_data = list(zip(x, y, w, h, color))
         vertices, faces, colors = self._generate_vertices_faces_and_colors()
@@ -247,8 +247,8 @@ class TextWithBoxVisual(Compound):
         self._rectagles_visual = MultiRectVisual(
             x=pos_x,
             y=pos_y,
-            w=[font_size * 1.5] * len(pos_x),
-            h=[font_size * 1.5] * len(pos_y),
+            w=[font_size * 1.75] * len(pos_x),
+            h=[font_size * 1.75] * len(pos_y),
             color=bgcolor,
             anchor_x=anchor_x,
             anchor_y=anchor_y,
@@ -259,10 +259,17 @@ class TextWithBoxVisual(Compound):
 
         # Initialize the line visual for outlines
         self._outline_visual = Line(color=outline_color, width=outline_width)
+        # Initialize markers to cover gaps
+        self._corner_markers = Markers()
         self.update_outline()  # Call this method to initialize the outline
 
         super().__init__(
-            [self._rectagles_visual, self._textvisual, self._outline_visual]
+            [
+                self._rectagles_visual,
+                self._textvisual,
+                self._outline_visual,
+                self._corner_markers,
+            ]
         )
 
     def update_outline(self):
@@ -271,7 +278,11 @@ class TextWithBoxVisual(Compound):
         vertices = []
         edges = []
 
-        vertex_count = 0  # Counter for the number of vertices added
+        corner_positions = []
+        half_outline_thickness = (
+            self._outline_visual.width / self.font_scale_factor / 2
+        )
+        vertex_count = 0
 
         for x, y, w, h in zip(
             self._rectagles_visual.x,
@@ -283,14 +294,34 @@ class TextWithBoxVisual(Compound):
                 x_offset,
                 y_offset,
             ) = self._rectagles_visual._calculate_anchor_offset(w, h)
-            # Define the corners of the rectangle in 3D
+
+            # Adjust the corners of the rectangle in 3D to account for outline thickness
             rectangle_vertices = [
-                [x - x_offset, y - y_offset, z],
-                [x - x_offset + w, y - y_offset, z],
-                [x - x_offset + w, y - y_offset + h, z],
-                [x - x_offset, y - y_offset + h, z],
+                [
+                    x - x_offset + half_outline_thickness,
+                    y - y_offset + half_outline_thickness,
+                    z,
+                ],
+                [
+                    x - x_offset + w - half_outline_thickness,
+                    y - y_offset + half_outline_thickness,
+                    z,
+                ],
+                [
+                    x - x_offset + w - half_outline_thickness,
+                    y - y_offset + h - half_outline_thickness,
+                    z,
+                ],
+                [
+                    x - x_offset + half_outline_thickness,
+                    y - y_offset + h - half_outline_thickness,
+                    z,
+                ],
             ]
             vertices.extend(rectangle_vertices)
+
+            # Collect corner positions for markers
+            corner_positions.extend(rectangle_vertices)
 
             # Define edges for this rectangle
             rectangle_edges = [
@@ -307,8 +338,18 @@ class TextWithBoxVisual(Compound):
         self._outline_visual.set_data(
             pos=np.array(vertices),
             connect=np.array(edges),
-            color=self.outline_color,
-            width=self.outline_thickness,
+            color=self._outline_visual.color,
+            width=self._outline_visual.width,
+        )
+
+        # Set data for the corner markers
+        self._corner_markers.set_data(
+            pos=np.array(corner_positions),
+            face_color=self._outline_visual.color,
+            edge_color=self._outline_visual.color,
+            edge_width=1,
+            size=self._outline_visual.width,
+            symbol="square",
         )
 
     @property
@@ -334,7 +375,7 @@ class TextWithBoxVisual(Compound):
     @font_size.setter
     def font_size(self, size: int):
         self._textvisual.font_size = size * self.font_scale_factor
-        self._rectagles_visual.h = size * 1.5 * self.rectangles_scale_factor
+        self._rectagles_visual.h = size * 1.75 * self.rectangles_scale_factor
 
     @property
     def pos(self):
@@ -343,13 +384,21 @@ class TextWithBoxVisual(Compound):
     @pos.setter
     def pos(self, pos: Union[list[tuple], tuple]):
         # bring arguments to correct shape
-        if isinstance(pos, list):
-            # subtract 0.5 from y to center the text
-            pos_text = [(p[0], p[1] + 0.5) for p in pos]
+        if isinstance(pos, tuple):
+            pos_x = [pos[0]]
+            pos_y = [pos[1]]
         else:
-            pos_text = (pos[0], pos[1] + 0.5)
-
-        self._textvisual.pos = pos_text
+            pos_x = [p[0] for p in pos]
+            pos_y = [p[1] for p in pos]
+        if "bottom" in self.anchors:
+            self._textvisual.pos = tuple(
+                zip(
+                    pos_x,
+                    [p + 3 * self.rectangles_scale_factor for p in pos_y],
+                )
+            )
+        else:
+            self._textvisual.pos = pos
         self._rectagles_visual.pos = pos
 
     @property
@@ -417,6 +466,7 @@ class TextWithBoxVisual(Compound):
 
     @outline_thickness.setter
     def outline_thickness(self, width: float):
+        width = width * self.font_scale_factor
         self._outline_visual.set_data(width=width)
 
     @property
@@ -426,6 +476,7 @@ class TextWithBoxVisual(Compound):
     @show_outline.setter
     def show_outline(self, show: bool):
         self._outline_visual.visible = show
+        self._corner_markers.visible = show
 
     def update_data(
         self,
@@ -447,8 +498,16 @@ class TextWithBoxVisual(Compound):
         self.text = text
         self.color = color
         self.font_size = font_size
-        self._textvisual.pos = pos
-        height = [font_size * 1.5 * self.rectangles_scale_factor] * len(pos_y)
+        if "bottom" in self.anchors:
+            self._textvisual.pos = tuple(
+                zip(
+                    pos_x,
+                    [p + 3 * self.rectangles_scale_factor for p in pos_y],
+                )
+            )
+        else:
+            self._textvisual.pos = pos
+        height = [font_size * 1.75 * self.rectangles_scale_factor] * len(pos_y)
 
         self._rectagles_visual.update_rects(
             pos_x, pos_y, box_width, height, bgcolor
