@@ -10,6 +10,7 @@ and the properties of the visuals.
 
 This structure is adapted from the napari dev example.
 """
+
 import contextlib
 from collections import defaultdict
 from typing import Literal
@@ -80,6 +81,8 @@ class LayerAnnotatorOverlay(SceneOverlay):
         "x_offsets": [0],
         "layer_widths": [0],
         "colors": ColorArray(["white"]),
+        "layer_scales": [1],
+        "hidden_outlines": None,
     }
 
 
@@ -88,6 +91,9 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
     """
     Vispy Timestamp Overlay.
     """
+
+    RECTANGLE_SCALER = 2
+    ANCHOR_CORRECTION = 0.5
 
     def __init__(self, *, viewer, overlay, parent=None):
         super().__init__(
@@ -169,6 +175,18 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
         self._update_annotations()
 
+    def _outlines_to_hide(self, current_layer, layer_number):
+        """
+        Returns the outlines to hide for the given layer number and current layer.
+        """
+        if layer_number > 1:
+            if current_layer == 0:
+                return ["top"]
+            elif current_layer == layer_number - 1:
+                return ["bottom"]
+            else:
+                return ["top", "bottom"]
+
     def _update_annotations(self):
         """
         Function for when a layer is added or removed from the viewer.
@@ -182,6 +200,11 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         for i, layer in enumerate(self.viewer.layers[::-1]):
             if layer.visible:
                 layers_to_annotate["layer_names"].append(layer.name)
+                layers_to_annotate["hidden_outlines"].append(
+                    self._outlines_to_hide(i, len(self.viewer.layers))
+                )
+
+                # Get color information
                 if isinstance(layer, labels.Labels):
                     layers_to_annotate["colors"].append(self.overlay.color)
                 else:
@@ -194,19 +217,24 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
                 # Update offsets based on grid position
                 grid_offset = layer_translations[i]
+
+                # Apply layer scale to offsets
+                layer_scale = getattr(layer, "scale", 1.0)[-1]
+
                 layers_to_annotate["y_offsets"].append(grid_offset[-2])
-
                 layers_to_annotate["x_offsets"].append(grid_offset[-1])
-                if not isinstance(layer, (Image, labels.Labels)):
-                    extent = self.viewer._sliced_extent_world
-                    layers_to_annotate["layer_widths"].append(
-                        extent[1][-2] - extent[0][-2]
-                    )
-                else:
-                    layers_to_annotate["layer_widths"].append(
-                        layer.data.shape[-2:][0]
-                    )
+                layers_to_annotate["layer_scales"].append(layer_scale)
 
+                # Apply scale to layer widths as well
+                if not isinstance(layer, (Image, labels.Labels)):
+                    extent = self.viewer._sliced_extent_world_augmented
+                    width = extent[1][-2] - extent[0][-2]
+                    layers_to_annotate["layer_widths"].append(width)
+                else:
+                    width = layer.data.shape[-2:][1]
+                    layers_to_annotate["layer_widths"].append(width)
+
+        # Convert colors to ColorArray
         try:
             layers_to_annotate["colors"] = ColorArray(
                 layers_to_annotate["colors"]
@@ -223,12 +251,21 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         self.camera_scale_factor = self.viewer.camera.zoom
         self._on_size_change()
 
+    def _get_max_layer_scale(self):
+        """
+        Returns the maximum layer scale from the layers to annotate.
+        """
+        if len(self.overlay.layers_to_annotate["layer_scales"]) > 0:
+            return max(self.overlay.layers_to_annotate["layer_scales"])
+        return 1.0
+
     def _on_position_change(self, event=None):
         """
         Callback function for when the position of the overlay is changed.
         """
+        max_layer_scale = self._get_max_layer_scale()
         position = self.overlay.position
-        x_max, y_max = (
+        y_max, x_max = (
             self.viewer.dims.range[-2][-2],
             self.viewer.dims.range[-1][-2],
         )
@@ -239,18 +276,28 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             self.overlay.layers_to_annotate["x_offsets"] = [0]
         if len(self.overlay.layers_to_annotate["layer_widths"]) < 1:
             self.overlay.layers_to_annotate["layer_widths"] = [0]
+        if len(self.overlay.layers_to_annotate["layer_scales"]) < 1:
+            self.overlay.layers_to_annotate["layer_scales"] = [1]
 
         if position == ScenePosition.TOP_LEFT:
             y_offsets, x_offsets = self.correct_offsets_for_overlap("down")
             anchors = ("left", "bottom")
-            transform = [self.x_spacer - 0.5, self.y_spacer - 0.5, 0, 0]
+            transform = [
+                self.x_spacer - self.ANCHOR_CORRECTION * max_layer_scale,
+                self.y_spacer - self.ANCHOR_CORRECTION * max_layer_scale,
+                0,
+                0,
+            ]
 
         elif position == ScenePosition.TOP_RIGHT:
             y_offsets, x_offsets = self.correct_offsets_for_overlap("down")
             anchors = ("right", "bottom")
             transform = [
-                x_max - self.x_size - self.x_spacer + 0.5,
-                self.y_spacer - 0.5,
+                x_max
+                - self.x_size
+                - self.x_spacer
+                + self.ANCHOR_CORRECTION * max_layer_scale,
+                self.y_spacer - self.ANCHOR_CORRECTION * max_layer_scale,
                 0,
                 0,
             ]
@@ -258,7 +305,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             y_offsets, x_offsets = self.correct_offsets_for_overlap("down")
             transform = [
                 x_max / 2 - self.x_size / 2,
-                self.y_spacer - 0.5,
+                self.y_spacer - self.ANCHOR_CORRECTION * max_layer_scale,
                 0,
                 0,
             ]
@@ -268,8 +315,14 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             y_offsets, x_offsets = self.correct_offsets_for_overlap("up")
             anchors = ("right", "top")
             transform = [
-                x_max - self.x_size - self.x_spacer + 0.5,
-                y_max - self.y_size - self.y_spacer + 0.5,
+                x_max
+                - self.x_size
+                - self.x_spacer
+                + self.ANCHOR_CORRECTION * max_layer_scale,
+                y_max
+                - self.y_size
+                - self.y_spacer
+                + self.ANCHOR_CORRECTION * max_layer_scale,
                 0,
                 0,
             ]
@@ -277,8 +330,11 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             y_offsets, x_offsets = self.correct_offsets_for_overlap("up")
             anchors = ("left", "top")
             transform = [
-                self.x_spacer - 0.5,
-                y_max - self.y_size - self.y_spacer + 0.5,
+                self.x_spacer - self.ANCHOR_CORRECTION * max_layer_scale,
+                y_max
+                - self.y_size
+                - self.y_spacer
+                + self.ANCHOR_CORRECTION * max_layer_scale,
                 0,
                 0,
             ]
@@ -287,13 +343,24 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             anchors = ("center", "top")
             transform = [
                 x_max / 2 - self.x_size / 2,
-                y_max - self.y_size - self.y_spacer + 0.5,
+                y_max
+                - self.y_size
+                - self.y_spacer
+                + self.ANCHOR_CORRECTION * max_layer_scale,
                 0,
                 0,
             ]
+
         self.node.transform.translate = transform
         self.node.anchors = anchors
         self.node._rectagles_visual.spacer = self.x_spacer
+        layer_widths = [
+            layer_width * layer_scale
+            for layer_width, layer_scale in zip(
+                self.overlay.layers_to_annotate["layer_widths"],
+                self.overlay.layers_to_annotate["layer_scales"],
+            )
+        ]
 
         self.node.update_data(
             text=self.overlay.layers_to_annotate["layer_names"],
@@ -302,8 +369,11 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             else self.overlay.color,
             font_size=self.overlay.size,
             pos=list(zip(x_offsets, y_offsets)),
-            box_width=self.overlay.layers_to_annotate["layer_widths"],
+            box_width=layer_widths,
             bgcolor=self.overlay.bg_color.rgba.tolist(),
+            hide_parial_outline=None
+            if self.viewer.grid.enabled
+            else self.overlay.layers_to_annotate["hidden_outlines"],
         )
 
     def correct_offsets_for_overlap(
@@ -321,18 +391,16 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
             if (y, x) in existing_offsets:
                 if movement_direction == "down":
                     y_offsets[idx] += (
-                        1.75
+                        self.RECTANGLE_SCALER
                         * self.overlay.size
                         * existing_offsets.count((y, x))
                     )
-                    # y_offsets[idx] -= self.overlay.outline_thickness
                 elif movement_direction == "up":
                     y_offsets[idx] -= (
-                        1.75
+                        self.RECTANGLE_SCALER
                         * self.overlay.size
                         * existing_offsets.count((y, x))
                     )
-                    # y_offsets[idx] += self.overlay.outline_thickness
             existing_offsets.append((y, x))
         return y_offsets, x_offsets
 
@@ -340,8 +408,7 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         """
         Callback function for when the size of the overlay is changed.
         """
-        # self.node.font_size = self.overlay.size * self.camera_scale_factor
-        self.node.font_scale_factor = self.camera_scale_factor
+        self.node.scale_factor = self.camera_scale_factor
         self.node.font_size = self.overlay.size
         self.node.outline_thickness = self.overlay.outline_thickness
         self._on_position_change()
@@ -350,7 +417,6 @@ class VispyLayerAnnotatorOverlay(ViewerOverlayMixin, VispySceneOverlay):
         """
         Callback function for when properties of the overlay are changed.
         """
-        # self._update_annotations()
         if self.viewer.dims.ndisplay == 3:
             self.node.show_outline = False
             self.node._rectagles_visual.visible = False

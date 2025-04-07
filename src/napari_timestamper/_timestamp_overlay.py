@@ -10,6 +10,7 @@ It inherits from the ViewerOverlayMixin and VispyCanvasOverlay classes.
 
 This structure is adapted from the napari dev example.
 """
+
 import contextlib
 import warnings
 from typing import Union
@@ -174,10 +175,15 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
             overlay=overlay,
             parent=parent,
         )
+        self.anchor_correction = 0.5
         self.y_spacer = self.overlay.y_spacer
         self.x_spacer = self.overlay.x_spacer
-        self.x_size = 0
-        self.y_size = 0
+        self.x_size = (
+            0  # this is not changed anywhere but for consistency is set to 0
+        )
+        self.y_size = (
+            0  # this is not changed anywhere but for consistency is set to 0
+        )
         self.camera_scaling_factor = 1
         self.node.transform = STTransform()
         self.overlay.events.position.connect(self._on_position_change)
@@ -243,10 +249,22 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
         """
         self.node.color = self.overlay.color
 
+    def get_max_layer_scale(self):
+        layer_scales = []
+        for layer in self.viewer.layers:
+            if hasattr(layer, "scale"):
+                layer_scales.append(layer.scale[-1])
+        return (
+            max(layer_scales)
+            if layer_scales and self.overlay.display_on_scene
+            else 1
+        )
+
     def _on_position_change(self, event=None):
         """
         Callback function for when the position of the overlay is changed.
         """
+        max_layer_scale = self.get_max_layer_scale()
         # filter FutureWarnings from napari
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -255,15 +273,19 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 return
 
             if not self.overlay.display_on_scene:
-                x_max, y_max = list(self.node.canvas.size)
+                self.anchor_correction = 0
+                y_max, x_max = self.viewer.window.qt_viewer.canvas.size
+
                 self.node.parent = (
                     self.viewer.window.qt_viewer.view
                 )  # this is a bit ugly and circumvents the overlay system which is not ideal but it works
             else:
+                self.anchor_correction = 0.5
                 x_max, y_max = (
-                    self.viewer.dims.range[-2][-2] + 1,
-                    self.viewer.dims.range[-1][-2] + 1,
+                    self.viewer.dims.range[-1][-2],  # max y + step size
+                    self.viewer.dims.range[-2][-2],  # max x + step size
                 )
+
                 if self.viewer.grid.enabled:
                     layer_translations = _find_grid_offsets(self.viewer)
                     # find maximum x and y translation
@@ -282,20 +304,28 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
         if position == CanvasPosition.TOP_LEFT:
             anchors = ("left", "bottom")
-            transform = [self.x_spacer - 0.5, self.y_spacer - 0.5, 0, 0]
+            transform = [
+                self.x_spacer - self.anchor_correction * max_layer_scale,
+                self.y_spacer - self.anchor_correction * max_layer_scale,
+                0,
+                0,
+            ]
 
         elif position == CanvasPosition.TOP_RIGHT:
             anchors = ("right", "bottom")
             transform = [
-                x_max - self.x_size - self.x_spacer - 0.5,
-                self.y_spacer - 0.5,
+                x_max
+                - self.x_size
+                - self.x_spacer
+                + self.anchor_correction * max_layer_scale,
+                self.y_spacer - self.anchor_correction * max_layer_scale,
                 0,
                 0,
             ]
         elif position == CanvasPosition.TOP_CENTER:
             transform = [
-                x_max / 2 - self.x_size / 2 - 0.5,
-                self.y_spacer - 0.5,
+                x_max / 2 - self.x_size / 2,
+                self.y_spacer - self.anchor_correction * max_layer_scale,
                 0,
                 0,
             ]
@@ -304,38 +334,55 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
         elif position == CanvasPosition.BOTTOM_RIGHT:
             anchors = ("right", "top")
             transform = [
-                x_max - self.x_size - self.x_spacer - 0.5,
-                y_max - self.y_size - self.y_spacer - 0.5,
+                x_max
+                - self.x_size
+                - self.x_spacer
+                + self.anchor_correction * max_layer_scale,
+                y_max
+                - self.y_size
+                - self.y_spacer
+                + self.anchor_correction * max_layer_scale,
                 0,
                 0,
             ]
         elif position == CanvasPosition.BOTTOM_LEFT:
             anchors = ("left", "top")
             transform = [
-                self.x_spacer - 0.5,
-                y_max - self.y_size - self.y_spacer - 0.5,
+                self.x_spacer - self.anchor_correction * max_layer_scale,
+                y_max
+                - self.y_size
+                - self.y_spacer
+                + self.anchor_correction * max_layer_scale,
                 0,
                 0,
             ]
         elif position == CanvasPosition.BOTTOM_CENTER:
             anchors = ("center", "top")
             transform = [
-                x_max / 2 - self.x_size / 2 - 0.5,
-                y_max - self.y_size - self.y_spacer - 0.5,
+                x_max / 2 - self.x_size / 2,
+                y_max
+                - self.y_size
+                - self.y_spacer
+                + self.anchor_correction * max_layer_scale,
                 0,
                 0,
             ]
+
         self.node.transform.translate = transform
         self.node.anchors = anchors
         self.node._rectagles_visual.spacer = self.overlay.x_spacer
-
+        box_width = (
+            x_max + 1 * max_layer_scale
+            if self.overlay.display_on_scene
+            else x_max
+        )
         self.node.update_data(
-            [self.overlay.text],
-            [self.overlay.color],
-            self.overlay.bg_color.rgba.tolist(),
-            self.overlay.size,
-            (0, 0),
-            [x_max],
+            text=[self.overlay.text],
+            color=[self.overlay.color],
+            bgcolor=self.overlay.bg_color.rgba.tolist(),
+            font_size=self.overlay.size,
+            pos=(0, 0),
+            box_width=[box_width],
         )
 
     def _on_size_change(self, event=None):
@@ -348,7 +395,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 self.overlay.scale_with_zoom
                 and self.node.parent is self.viewer.window.qt_viewer.view.scene
             ):
-                self.node.font_scale_factor = self.camera_scaling_factor
+                self.node.scale_factor = self.camera_scaling_factor
                 self.node.font_size = self.overlay.size
                 self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.rectangles_scale_factor = 1
@@ -357,7 +404,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 not self.overlay.scale_with_zoom
                 and self.node.parent is self.viewer.window.qt_viewer.view
             ):
-                self.node.font_scale_factor = 1
+                self.node.scale_factor = 1
                 self.node.font_size = self.overlay.size
                 self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.rectangles_scale_factor = 1
@@ -366,7 +413,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 not self.overlay.scale_with_zoom
                 and self.node.parent is self.viewer.window.qt_viewer.view.scene
             ):
-                self.node.font_scale_factor = 1
+                self.node.scale_factor = 1
                 self.node.rectangles_scale_factor = (
                     1 / self.camera_scaling_factor
                 )
@@ -377,7 +424,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 self.overlay.scale_with_zoom
                 and self.node.parent is self.viewer.window.qt_viewer.view
             ):
-                self.node.font_scale_factor = self.camera_scaling_factor
+                self.node.scale_factor = self.camera_scaling_factor
                 self.node.rectangles_scale_factor = self.camera_scaling_factor
                 self.node.outline_thickness = self.overlay.outline_thickness
                 self.node.font_size = self.overlay.size

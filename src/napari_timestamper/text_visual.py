@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Union
+from typing import Literal, Union
 
 import numpy as np
 from vispy.color import Color
@@ -96,7 +96,6 @@ class MultiRectVisual(Mesh):
             dx = self.spacer
 
         # Calculate the vertical offset
-        # Assuming that for rectangles, 'top' and 'bottom' relate to the actual top and bottom edges
         if self.anchor_y in ("top"):
             dy = +height
         elif self.anchor_y in ("center", "middle"):
@@ -211,6 +210,8 @@ class MultiRectVisual(Mesh):
 
 
 class TextWithBoxVisual(Compound):
+    RECTANGLE_SCALER = 2
+
     def __init__(
         self,
         text: Union[list[str], str],
@@ -247,14 +248,14 @@ class TextWithBoxVisual(Compound):
         self._rectagles_visual = MultiRectVisual(
             x=pos_x,
             y=pos_y,
-            w=[font_size * 1.75] * len(pos_x),
-            h=[font_size * 1.75] * len(pos_y),
+            w=[font_size * self.RECTANGLE_SCALER] * len(pos_x),
+            h=[font_size * self.RECTANGLE_SCALER] * len(pos_y),
             color=bgcolor,
             anchor_x=anchor_x,
             anchor_y=anchor_y,
         )
 
-        self.font_scale_factor = 1
+        self.scale_factor = 1
         self.rectangles_scale_factor = 1
 
         # Initialize the line visual for outlines
@@ -272,68 +273,103 @@ class TextWithBoxVisual(Compound):
             ]
         )
 
-    def update_outline(self):
-        # Assuming each rectangle is flat on the xy-plane with z=0
+    def update_outline(
+        self,
+        hide_partial_outline: list[Literal["left", "right", "top", "bottom"]]
+        | list[list[Literal["left", "right", "top", "bottom"]]]
+        | None = None,
+    ):
         z = 0
         vertices = []
         edges = []
-
         corner_positions = []
         half_outline_thickness = (
-            self._outline_visual.width / self.font_scale_factor / 2
+            self._outline_visual.width / self.scale_factor / 2
         )
         vertex_count = 0
 
-        for x, y, w, h in zip(
-            self._rectagles_visual.x,
-            self._rectagles_visual.y,
-            self._rectagles_visual.w,
-            self._rectagles_visual.h,
+        n_rects = len(self._rectagles_visual.x)
+
+        if not hide_partial_outline:
+            hide_partial_outline = [[] for _ in range(n_rects)]
+        elif isinstance(hide_partial_outline[0], str):
+            hide_partial_outline = [hide_partial_outline] * n_rects
+        elif len(hide_partial_outline) != n_rects:
+            raise ValueError(
+                "Length of hide_partial_outline must match number of rectangles"
+            )
+
+        for i, (x, y, w, h) in enumerate(
+            zip(
+                self._rectagles_visual.x,
+                self._rectagles_visual.y,
+                self._rectagles_visual.w,
+                self._rectagles_visual.h,
+            )
         ):
             (
                 x_offset,
                 y_offset,
             ) = self._rectagles_visual._calculate_anchor_offset(w, h)
 
-            # Adjust the corners of the rectangle in 3D to account for outline thickness
-            rectangle_vertices = [
+            rect_verts = [
                 [
                     x - x_offset + half_outline_thickness,
                     y - y_offset + half_outline_thickness,
                     z,
-                ],
+                ],  # 0: bottom-left
                 [
                     x - x_offset + w - half_outline_thickness,
                     y - y_offset + half_outline_thickness,
                     z,
-                ],
+                ],  # 1: bottom-right
                 [
                     x - x_offset + w - half_outline_thickness,
                     y - y_offset + h - half_outline_thickness,
                     z,
-                ],
+                ],  # 2: top-right
                 [
                     x - x_offset + half_outline_thickness,
                     y - y_offset + h - half_outline_thickness,
                     z,
-                ],
+                ],  # 3: top-left
             ]
-            vertices.extend(rectangle_vertices)
+            vertices.extend(rect_verts)
 
-            # Collect corner positions for markers
-            corner_positions.extend(rectangle_vertices)
+            hide_sides = hide_partial_outline[i]
+            if hide_sides is None:
+                hide_sides = []
+            if isinstance(hide_sides, str):
+                hide_sides = [hide_sides]
+            hide_sides = [side.lower() for side in hide_sides]
 
-            # Define edges for this rectangle
-            rectangle_edges = [
-                [vertex_count, vertex_count + 1],
-                [vertex_count + 1, vertex_count + 2],
-                [vertex_count + 2, vertex_count + 3],
-                [vertex_count + 3, vertex_count],
+            # Define edges if not hidden
+            if "bottom" not in hide_sides:
+                edges.append([vertex_count + 0, vertex_count + 1])
+            if "right" not in hide_sides:
+                edges.append([vertex_count + 1, vertex_count + 2])
+            if "top" not in hide_sides:
+                edges.append([vertex_count + 2, vertex_count + 3])
+            if "left" not in hide_sides:
+                edges.append([vertex_count + 3, vertex_count + 0])
+
+            # Only show corner markers if either connecting edge is present
+            show_corner = [
+                "left" not in hide_sides
+                or "bottom" not in hide_sides,  # bottom-left
+                "bottom" not in hide_sides
+                or "right" not in hide_sides,  # bottom-right
+                "right" not in hide_sides
+                or "top" not in hide_sides,  # top-right
+                "top" not in hide_sides
+                or "left" not in hide_sides,  # top-left
             ]
-            edges.extend(rectangle_edges)
 
-            # Update the vertex count for the next rectangle
-            vertex_count += len(rectangle_vertices)
+            for j in range(4):
+                if show_corner[j]:
+                    corner_positions.append(rect_verts[j])
+
+            vertex_count += 4
 
         self._outline_visual.set_data(
             pos=np.array(vertices),
@@ -342,12 +378,11 @@ class TextWithBoxVisual(Compound):
             width=self._outline_visual.width,
         )
 
-        # Set data for the corner markers
         self._corner_markers.set_data(
             pos=np.array(corner_positions),
             face_color=self._outline_visual.color,
             edge_color=self._outline_visual.color,
-            edge_width=1,
+            edge_width=0.9,
             size=self._outline_visual.width,
             symbol="square",
         )
@@ -374,8 +409,8 @@ class TextWithBoxVisual(Compound):
 
     @font_size.setter
     def font_size(self, size: int):
-        self._textvisual.font_size = size * self.font_scale_factor
-        self._rectagles_visual.h = size * 1.75 * self.rectangles_scale_factor
+        self._textvisual.font_size = size * self.scale_factor
+        self._rectagles_visual.h = size * self.rectangles_scale_factor
 
     @property
     def pos(self):
@@ -383,22 +418,7 @@ class TextWithBoxVisual(Compound):
 
     @pos.setter
     def pos(self, pos: Union[list[tuple], tuple]):
-        # bring arguments to correct shape
-        if isinstance(pos, tuple):
-            pos_x = [pos[0]]
-            pos_y = [pos[1]]
-        else:
-            pos_x = [p[0] for p in pos]
-            pos_y = [p[1] for p in pos]
-        if "bottom" in self.anchors:
-            self._textvisual.pos = tuple(
-                zip(
-                    pos_x,
-                    [p + 3 * self.rectangles_scale_factor for p in pos_y],
-                )
-            )
-        else:
-            self._textvisual.pos = pos
+        self._textvisual.pos = pos
         self._rectagles_visual.pos = pos
 
     @property
@@ -466,8 +486,9 @@ class TextWithBoxVisual(Compound):
 
     @outline_thickness.setter
     def outline_thickness(self, width: float):
-        width = width * self.font_scale_factor
+        width = width * self.scale_factor
         self._outline_visual.set_data(width=width)
+        self.update_outline()
 
     @property
     def show_outline(self):
@@ -486,6 +507,9 @@ class TextWithBoxVisual(Compound):
         font_size: int = 12,
         pos: Union[list[tuple], tuple] = (0, 0),
         box_width: Union[list[float], float] = 0,
+        hide_parial_outline: list[
+            Literal["left", "right", "top", "bottom"]
+        ] = None,
     ):
         # bring arguments to correct shape
         if isinstance(pos, tuple):
@@ -495,21 +519,25 @@ class TextWithBoxVisual(Compound):
             pos_x = [p[0] for p in pos]
             pos_y = [p[1] for p in pos]
 
+        # shift text_pos by 0.5 * font_size * self.scale_factor
+        # to center the text in the box
+        text_pos = [
+            (
+                pos_x[i],
+                pos_y[i] + 0.35 * font_size * self.rectangles_scale_factor,
+            )
+            for i in range(len(pos_x))
+        ]
+
         self.text = text
         self.color = color
         self.font_size = font_size
-        if "bottom" in self.anchors:
-            self._textvisual.pos = tuple(
-                zip(
-                    pos_x,
-                    [p + 3 * self.rectangles_scale_factor for p in pos_y],
-                )
-            )
-        else:
-            self._textvisual.pos = pos
-        height = [font_size * 1.75 * self.rectangles_scale_factor] * len(pos_y)
+        self._textvisual.pos = text_pos
+        height = [
+            font_size * self.RECTANGLE_SCALER * self.rectangles_scale_factor
+        ] * len(pos_y)
 
         self._rectagles_visual.update_rects(
             pos_x, pos_y, box_width, height, bgcolor
         )
-        self.update_outline()
+        self.update_outline(hide_parial_outline)
