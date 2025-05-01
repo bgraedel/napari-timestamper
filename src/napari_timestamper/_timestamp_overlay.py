@@ -63,11 +63,10 @@ class TimestampOverlay(SceneOverlay):
         return f"{self.prefix} {timestamp} {suffix}"
 
     def _format_timestamp(self, total_time, format_specifier):
-        # compute the actual seconds elapsed
         t = float(self.start_time + self.time * self.step_size)
         hours = int(t // 3600)
-        minutes_mod = int((t % 3600) // 60)  # 0–59
-        total_minutes = int(t // 60)  # cumulative
+        minutes_mod = int((t % 3600) // 60)
+        total_minutes = int(t // 60)
         seconds = t % 60
 
         if format_specifier == "HH:MM:SS":
@@ -83,7 +82,6 @@ class TimestampOverlay(SceneOverlay):
         elif format_specifier == "H:M:S.ss":
             return f"{hours}:{minutes_mod}:{seconds:.2f}"
         elif format_specifier == "MM:SS":
-            # minutes within the hour still 0–59
             return f"{minutes_mod:02}:{seconds:02.0f}"
         elif format_specifier == "MM:SS.ss":
             return f"{minutes_mod:02}:{seconds:05.2f}"
