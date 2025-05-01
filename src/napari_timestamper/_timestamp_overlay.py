@@ -88,12 +88,10 @@ class TimestampOverlay(SceneOverlay):
         elif format_specifier == "MM:SS.ss":
             return f"{minutes_mod:02}:{seconds:05.2f}"
         elif format_specifier == "M:S":
-            # cumulative minutes, so it never resets
             return f"{total_minutes}:{seconds:.0f}"
         elif format_specifier == "M:S.ss":
             return f"{total_minutes}:{seconds:.2f}"
         elif format_specifier == "SS":
-            # total seconds, never resets
             return f"{t:02.0f}"
         elif format_specifier == "SS.ss":
             return f"{t:05.2f}"
