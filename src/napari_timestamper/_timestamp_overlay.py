@@ -58,65 +58,47 @@ class TimestampOverlay(SceneOverlay):
     display_on_scene: bool = True
 
     def _timestamp_string(self):
-        """
-        Returns the formatted timestamp string.
-
-        Returns
-        -------
-        str
-            The formatted timestamp string.
-        """
         timestamp = self._format_timestamp(self.time, self.time_format)
         suffix = self.custom_suffix if self.custom_suffix else self.time_format
         return f"{self.prefix} {timestamp} {suffix}"
 
     def _format_timestamp(self, total_time, format_specifier):
-        """
-        Formats the timestamp string based on the format specifier.
-
-        Parameters
-        ----------
-        total_time : int
-            The total time in seconds.
-        format_specifier : str
-            The format specifier for the timestamp text.
-
-        Returns
-        -------
-        str
-            The formatted timestamp string.
-        """
-        time = float(self.start_time + self.time * self.step_size)
-        hours = int(time // 3600)
-        minutes = int((time % 3600) // 60)
-        seconds = time % 60
+        # compute the actual seconds elapsed
+        t = float(self.start_time + self.time * self.step_size)
+        hours = int(t // 3600)
+        minutes_mod = int((t % 3600) // 60)  # 0–59
+        total_minutes = int(t // 60)  # cumulative
+        seconds = t % 60
 
         if format_specifier == "HH:MM:SS":
-            return f"{hours:02}:{minutes:02}:{seconds:02.0f}"
-        if format_specifier == "HH:MM:SS.ss":
-            return f"{hours:02}:{minutes:02}:{seconds:05.2f}"
+            return f"{hours:02}:{minutes_mod:02}:{seconds:02.0f}"
+        elif format_specifier == "HH:MM:SS.ss":
+            return f"{hours:02}:{minutes_mod:02}:{seconds:05.2f}"
         elif format_specifier == "HH:MM":
-            return f"{hours:02}:{minutes:02}"
+            return f"{hours:02}:{minutes_mod:02}"
         elif format_specifier == "H:M:S":
-            return f"{hours}:{minutes}:{seconds:.0f}"
+            return f"{hours}:{minutes_mod}:{seconds:.0f}"
         elif format_specifier == "H:M":
-            return f"{hours}:{minutes}"
+            return f"{hours}:{minutes_mod}"
         elif format_specifier == "H:M:S.ss":
-            return f"{hours}:{minutes}:{seconds:.2f}"
+            return f"{hours}:{minutes_mod}:{seconds:.2f}"
         elif format_specifier == "MM:SS":
-            return f"{minutes:02}:{seconds:02.0f}"
+            # minutes within the hour still 0–59
+            return f"{minutes_mod:02}:{seconds:02.0f}"
         elif format_specifier == "MM:SS.ss":
-            return f"{minutes:02}:{seconds:05.2f}"
+            return f"{minutes_mod:02}:{seconds:05.2f}"
         elif format_specifier == "M:S":
-            return f"{minutes}:{seconds:.0f}"
+            # cumulative minutes, so it never resets
+            return f"{total_minutes}:{seconds:.0f}"
         elif format_specifier == "M:S.ss":
-            return f"{minutes}:{seconds:.2f}"
+            return f"{total_minutes}:{seconds:.2f}"
         elif format_specifier == "SS":
-            return f"{total_time:02.0f}"
+            # total seconds, never resets
+            return f"{t:02.0f}"
         elif format_specifier == "SS.ss":
-            return f"{total_time:05.2f}"
+            return f"{t:05.2f}"
         elif format_specifier == "F":
-            return f"{total_time:.0f}"
+            return f"{t:.0f}"
         else:
             raise ValueError(f"Unknown format specifier: {format_specifier}")
 
