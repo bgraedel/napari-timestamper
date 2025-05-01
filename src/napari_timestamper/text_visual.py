@@ -275,9 +275,11 @@ class TextWithBoxVisual(Compound):
 
     def update_outline(
         self,
-        hide_partial_outline: list[Literal["left", "right", "top", "bottom"]]
-        | list[list[Literal["left", "right", "top", "bottom"]]]
-        | None = None,
+        hide_partial_outline: (
+            list[Literal["left", "right", "top", "bottom"]]
+            | list[list[Literal["left", "right", "top", "bottom"]]]
+            | None
+        ) = None,
     ):
         z = 0
         vertices = []
@@ -382,7 +384,7 @@ class TextWithBoxVisual(Compound):
             pos=np.array(corner_positions),
             face_color=self._outline_visual.color,
             edge_color=self._outline_visual.color,
-            edge_width=0.9,
+            edge_width=0.75 * self.rectangles_scale_factor,
             size=self._outline_visual.width,
             symbol="square",
         )

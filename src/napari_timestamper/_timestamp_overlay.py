@@ -277,7 +277,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                 y_max, x_max = self.viewer.window.qt_viewer.canvas.size
 
                 self.node.parent = (
-                    self.viewer.window.qt_viewer.view
+                    self.viewer.window.qt_viewer.canvas.view
                 )  # this is a bit ugly and circumvents the overlay system which is not ideal but it works
             else:
                 self.anchor_correction = 0.5
@@ -299,7 +299,7 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
                     y_max += y_max_offset
 
                 self.node.parent = (
-                    self.viewer.window.qt_viewer.view.scene
+                    self.viewer.window.qt_viewer.canvas.view.scene
                 )  # this is a bit ugly and circumvents the overlay system which is not ideal but it works
 
         if position == CanvasPosition.TOP_LEFT:
@@ -393,7 +393,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
             warnings.simplefilter("ignore")
             if (
                 self.overlay.scale_with_zoom
-                and self.node.parent is self.viewer.window.qt_viewer.view.scene
+                and self.node.parent
+                is self.viewer.window.qt_viewer.canvas.view.scene
             ):
                 self.node.scale_factor = self.camera_scaling_factor
                 self.node.font_size = self.overlay.size
@@ -402,7 +403,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
             elif (
                 not self.overlay.scale_with_zoom
-                and self.node.parent is self.viewer.window.qt_viewer.view
+                and self.node.parent
+                is self.viewer.window.qt_viewer.canvas.view
             ):
                 self.node.scale_factor = 1
                 self.node.font_size = self.overlay.size
@@ -411,7 +413,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
             elif (
                 not self.overlay.scale_with_zoom
-                and self.node.parent is self.viewer.window.qt_viewer.view.scene
+                and self.node.parent
+                is self.viewer.window.qt_viewer.canvas.view.scene
             ):
                 self.node.scale_factor = 1
                 self.node.rectangles_scale_factor = (
@@ -422,7 +425,8 @@ class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
 
             elif (
                 self.overlay.scale_with_zoom
-                and self.node.parent is self.viewer.window.qt_viewer.view
+                and self.node.parent
+                is self.viewer.window.qt_viewer.canvas.view
             ):
                 self.node.scale_factor = self.camera_scaling_factor
                 self.node.rectangles_scale_factor = self.camera_scaling_factor
