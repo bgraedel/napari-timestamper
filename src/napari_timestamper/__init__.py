@@ -12,6 +12,7 @@ from ._widget import (
     LayerAnnotationsWidget,
     LayertoRGBWidget,
     RenderRGBWidget,
+    SplitStackWidget,
     TimestampWidget,
 )
 from .render_as_rgb import render_as_rgb, save_image_stack
@@ -21,6 +22,7 @@ __all__ = (
     "LayerAnnotationsWidget",
     "RenderRGBWidget",
     "LayertoRGBWidget",
+    "SplitStackWidget",
     "TimestampOverlay",
     "VispyTimestampOverlay",
     "LayerAnnotatorOverlay",

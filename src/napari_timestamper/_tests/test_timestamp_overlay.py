@@ -23,11 +23,8 @@ def test_text_instantiation(make_napari_viewer):
         try:
             viewer._overlays["timestamp"]
         except KeyError:
-            viewer._overlays["timestamp"] = TimestampOverlay(visible=True)
             overlay_to_visual[TimestampOverlay] = VispyTimestampOverlay
-            viewer.window._qt_viewer.canvas._add_overlay_to_visual(
-                viewer._overlays["timestamp"]
-            )
+            viewer._overlays["timestamp"] = TimestampOverlay(visible=True)
         timestamp_overlay = viewer._overlays["timestamp"]
 
     assert isinstance(timestamp_overlay, TimestampOverlay)

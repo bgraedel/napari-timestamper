@@ -14,6 +14,9 @@ contributions:
     - id: napari-timestamper.render_to_layer
       python_name: napari_timestamper._widget:LayertoRGBWidget
       title: Convert to RGB layer
+    - id: napari-timestamper.split_stack
+      python_name: napari_timestamper._widget:SplitStackWidget
+      title: Split Stack
   widgets:
     - command: napari-timestamper.timestamper
       display_name: Timestamper
@@ -23,3 +26,5 @@ contributions:
       display_name: Export RGB stack
     - command: napari-timestamper.render_to_layer
       display_name: Convert to RGB layer
+    - command: napari-timestamper.split_stack
+      display_name: Split Stack

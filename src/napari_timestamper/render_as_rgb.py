@@ -35,10 +35,10 @@ def render_as_rgb(
                 scale_factor=upsample_factor, flash=False
             ).shape
             rgb = np.zeros(
-                (viewer.dims.range[axis][1].astype(int) + 1, *target_shape),
+                (int(viewer.dims.range[axis][1]) + 1, *target_shape),
                 dtype=np.uint8,
             )
-            for j in range(viewer.dims.range[axis][1].astype(int) + 1):
+            for j in range(int(viewer.dims.range[axis][1]) + 1):
                 viewer.dims.set_current_step(axis, j)
                 rendered_img = viewer.export_figure(
                     scale_factor=upsample_factor, flash=False
@@ -51,13 +51,13 @@ def render_as_rgb(
             rgb = np.zeros(
                 (
                     len(axis),
-                    viewer.dims.range[axis[0]][1].astype(int) + 1,
+                    int(viewer.dims.range[axis[0]][1]) + 1,
                     *target_shape,
                 ),
                 dtype=np.uint8,
             )
             for ax in axis:
-                for j in range(viewer.dims.range[ax][1].astype(int) + 1):
+                for j in range(int(viewer.dims.range[ax][1]) + 1):
                     viewer.dims.set_current_step(ax, j)
                     rendered_img = viewer.export_figure(
                         scale_factor=upsample_factor, flash=False

@@ -9,7 +9,7 @@ def _find_grid_offsets(viewer):
     extent = viewer._sliced_extent_world_augmented
     n_layers = len(viewer.layers)
     for i, layer in enumerate(viewer.layers):
-        i_row, i_column = viewer.grid.position(n_layers - 1 - i, n_layers)
+        i_row, i_column = viewer.grid.position(i, n_layers)
         # viewer._subplot(layer, (i_row, i_column), extent)
         scene_shift = extent[1] - extent[0]
         translate_2d = np.multiply(scene_shift[-2:], (i_row, i_column))

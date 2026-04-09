@@ -210,7 +210,7 @@ class MultiRectVisual(Mesh):
 
 
 class TextWithBoxVisual(Compound):
-    RECTANGLE_SCALER = 2
+    RECTANGLE_SCALER = 3
 
     def __init__(
         self,
@@ -412,7 +412,9 @@ class TextWithBoxVisual(Compound):
     @font_size.setter
     def font_size(self, size: int):
         self._textvisual.font_size = size * self.scale_factor
-        self._rectagles_visual.h = size * self.rectangles_scale_factor
+        self._rectagles_visual.h = (
+            size * self.RECTANGLE_SCALER * self.rectangles_scale_factor
+        )
 
     @property
     def pos(self):
@@ -526,7 +528,7 @@ class TextWithBoxVisual(Compound):
         text_pos = [
             (
                 pos_x[i],
-                pos_y[i] + 0.35 * font_size * self.rectangles_scale_factor,
+                pos_y[i] + 0.5 * font_size * self.rectangles_scale_factor,
             )
             for i in range(len(pos_x))
         ]
