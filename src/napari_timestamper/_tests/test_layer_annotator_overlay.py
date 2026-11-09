@@ -1,18 +1,6 @@
-"""
-Tests for the refactored LayerAnnotatorOverlay.
-
-Key facts about the new architecture:
-- SceneOverlay.visible defaults to False (napari keeps scene overlays hidden
-  until explicitly enabled).  Tests that check visibility must account for this.
-- One LayerAnnotatorOverlay lives in layer._overlays[OVERLAY_KEY] per layer.
-- VispyLayerAnnotatorOverlay requires a `layer` argument; access it via the
-  canvas's _layer_overlay_to_visual dict after setting visible=True.
-- The canvas defers vispy overlay creation until overlay.visible is True.
-"""
-
 import numpy as np
 import pytest
-from napari._vispy.utils.visual import overlay_to_visual
+from napari.components._viewer_constants import CanvasPosition
 
 from napari_timestamper._layer_annotator_overlay import (
     LayerAnnotatorManager,
@@ -20,203 +8,134 @@ from napari_timestamper._layer_annotator_overlay import (
     VispyLayerAnnotatorOverlay,
 )
 
-OVERLAY_KEY = LayerAnnotatorManager.OVERLAY_KEY
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+KEY = LayerAnnotatorManager.KEY
 
 
 @pytest.fixture
-def viewer_with_layers(make_napari_viewer):
-    """Viewer with two image layers and the overlay factory registered."""
+def viewer(make_napari_viewer):
     viewer = make_napari_viewer()
-    overlay_to_visual[LayerAnnotatorOverlay] = VispyLayerAnnotatorOverlay
-    l1 = viewer.add_image(np.random.random((10, 10)), name="Layer1")
-    l2 = viewer.add_image(np.random.random((10, 10)), name="Layer2")
-    return viewer, l1, l2
+    viewer.add_image(np.random.random((10, 10)), name="Layer1")
+    viewer.add_image(np.random.random((10, 10)), name="Layer2")
+    return viewer
 
 
 @pytest.fixture
-def manager(viewer_with_layers):
-    viewer, l1, l2 = viewer_with_layers
-    mgr = LayerAnnotatorManager(viewer)
-    return mgr, viewer, l1, l2
+def manager(viewer):
+    manager = LayerAnnotatorManager(viewer)
+    manager.visible = True
+    return manager
 
 
-# ---------------------------------------------------------------------------
-# Model tests
-# ---------------------------------------------------------------------------
-
-
-def test_overlay_model_defaults():
+def test_model_defaults():
     overlay = LayerAnnotatorOverlay()
-    assert overlay.color == "white"
+    assert overlay.color.tolist() == [1, 1, 1, 1]  # validated to RGBA
+    assert overlay.bg_color.tolist() == [0, 0, 0, 1]
     assert overlay.size == 12
-    assert overlay.bold is False
-    assert overlay.italic is False
-    assert overlay.show_background is False
-    assert overlay.show_outline is False
-    # SceneOverlay.visible defaults to False in napari
-    assert overlay.visible is False
+    assert not overlay.visible
+    assert overlay.display_on_scene
 
 
-def test_overlay_model_custom_values():
-    overlay = LayerAnnotatorOverlay(color="red", size=20, bold=True)
-    assert overlay.color == "red"
-    assert overlay.size == 20
-    assert overlay.bold is True
-
-
-def test_overlay_model_visible_explicit():
-    overlay = LayerAnnotatorOverlay(visible=True)
-    assert overlay.visible is True
-
-
-# ---------------------------------------------------------------------------
-# Manager tests
-# ---------------------------------------------------------------------------
-
-
-def test_manager_attaches_overlay_to_existing_layers(manager):
-    mgr, viewer, l1, l2 = manager
-    assert OVERLAY_KEY in l1._overlays
-    assert OVERLAY_KEY in l2._overlays
-    assert isinstance(l1._overlays[OVERLAY_KEY], LayerAnnotatorOverlay)
-    assert isinstance(l2._overlays[OVERLAY_KEY], LayerAnnotatorOverlay)
-
-
-def test_manager_attaches_overlay_to_new_layer(manager):
-    mgr, viewer, l1, l2 = manager
-    l3 = viewer.add_image(np.random.random((10, 10)), name="Layer3")
-    assert OVERLAY_KEY in l3._overlays
-    assert isinstance(l3._overlays[OVERLAY_KEY], LayerAnnotatorOverlay)
-
-
-def test_manager_detaches_overlay_on_layer_remove(manager):
-    mgr, viewer, l1, l2 = manager
+def test_manager_attaches_and_detaches(viewer, manager):
+    l1, l2 = viewer.layers
+    assert isinstance(l1._overlays[KEY], LayerAnnotatorOverlay)
+    l3 = viewer.add_image(np.zeros((10, 10)), name="Layer3")
+    assert l3._overlays[KEY].visible
     viewer.layers.remove(l1)
-    assert OVERLAY_KEY not in l1._overlays
+    assert KEY not in l1._overlays
+    manager.close()
+    assert KEY not in l2._overlays
+    assert KEY not in viewer.add_image(np.zeros((5, 5)))._overlays
 
 
-def test_manager_update_settings_propagates(manager):
-    mgr, viewer, l1, l2 = manager
-    mgr.update_settings(size=20, bold=True, color="cyan")
-    for layer in [l1, l2]:
-        ov = layer._overlays[OVERLAY_KEY]
-        assert ov.size == 20
-        assert ov.bold is True
-        assert ov.color == "cyan"
+def test_manager_settings_propagate(viewer, manager):
+    manager.update_settings(size=20, bold=True, color="cyan")
+    for layer in viewer.layers:
+        overlay = layer._overlays[KEY]
+        assert overlay.size == 20
+        assert overlay.bold
+        assert overlay.color.tolist() == [0, 1, 1, 1]
+    assert LayerAnnotatorManager(viewer, size=18).style.size == 18
 
 
-def test_manager_set_visible(manager):
-    mgr, viewer, l1, l2 = manager
-    # Explicitly show first
-    mgr.set_visible(True)
-    for layer in [l1, l2]:
-        assert layer._overlays[OVERLAY_KEY].visible is True
-    # Then hide
-    mgr.set_visible(False)
-    for layer in [l1, l2]:
-        assert layer._overlays[OVERLAY_KEY].visible is False
+def test_manager_visibility_and_selection(viewer, manager):
+    l1, l2 = viewer.layers
+    assert l1._overlays[KEY].visible and l2._overlays[KEY].visible
+    manager.hidden_layers = {l1}
+    assert not l1._overlays[KEY].visible
+    assert l2._overlays[KEY].visible
+    manager.visible = False
+    assert not l2._overlays[KEY].visible
 
 
-def test_manager_set_layer_visible(manager):
-    mgr, viewer, l1, l2 = manager
-    # Start with both visible
-    mgr.set_visible(True)
-    # Hide only Layer1
-    mgr.set_layer_visible("Layer1", False)
-    assert l1._overlays[OVERLAY_KEY].visible is False
-    assert l2._overlays[OVERLAY_KEY].visible is True  # unaffected
+def test_manager_stacks_visible_labels(viewer, manager):
+    l1, l2 = viewer.layers
+    # topmost layer first
+    assert l2._overlays[KEY].stack_index == 0
+    assert l1._overlays[KEY].stack_index == 1
+    assert l1._overlays[KEY].stack_count == 2
+    l2.visible = False
+    assert l1._overlays[KEY].stack_index == 0
+    assert l1._overlays[KEY].stack_count == 1
 
 
-def test_manager_get_any_overlay(manager):
-    mgr, viewer, l1, l2 = manager
-    ov = mgr.get_any_overlay()
-    assert ov is not None
-    assert isinstance(ov, LayerAnnotatorOverlay)
-
-
-def test_manager_close(manager):
-    mgr, viewer, l1, l2 = manager
-    mgr.close()
-    l3 = viewer.add_image(np.random.random((10, 10)), name="Layer3")
-    assert OVERLAY_KEY not in l3._overlays
-
-
-def test_manager_initial_settings_applied(viewer_with_layers):
-    viewer, l1, l2 = viewer_with_layers
-    _ = LayerAnnotatorManager(viewer, size=18, color="magenta")
-    for layer in [l1, l2]:
-        ov = layer._overlays[OVERLAY_KEY]
-        assert ov.size == 18
-        assert ov.color == "magenta"
-
-
-# ---------------------------------------------------------------------------
-# Integration: factory registration and overlay placement
-# ---------------------------------------------------------------------------
-
-
-def test_overlay_registered_in_factory():
-    assert LayerAnnotatorOverlay in overlay_to_visual
-    assert (
-        overlay_to_visual[LayerAnnotatorOverlay] is VispyLayerAnnotatorOverlay
+def test_manager_native_mode(viewer, manager):
+    l1, l2 = viewer.layers
+    manager.update_settings(
+        size=20, position="bottom_left", display_on_scene=False
     )
+    for layer in (l1, l2):
+        assert layer.name_overlay.visible
+        assert layer.name_overlay.font_size == 20
+        assert layer.name_overlay.position == "bottom_left"
+    manager.update_settings(use_layer_color=True)
+    assert l1.name_overlay.color is None  # napari picks the colormap color
+    manager.hidden_layers = {l1}
+    assert not l1.name_overlay.visible
+    manager.update_settings(display_on_scene=True)
+    assert not l2.name_overlay.visible
 
 
-def test_layer_overlay_added_to_layer_not_viewer(viewer_with_layers):
-    """Overlays now live in layer._overlays, NOT in viewer._overlays."""
-    viewer, l1, l2 = viewer_with_layers
-    _ = LayerAnnotatorManager(viewer)
-    assert "LayerAnnotator" not in viewer._overlays
-    assert OVERLAY_KEY in l1._overlays
-    assert OVERLAY_KEY in l2._overlays
+def test_manager_leaves_user_name_overlays_alone(viewer, manager):
+    # name overlays switched on elsewhere (napari's layer context menu)
+    l1, _ = viewer.layers
+    l1.name_overlay.visible = True
+    manager.visible = False
+    manager.update_settings(size=30)
+    assert l1.name_overlay.visible
 
 
-# ---------------------------------------------------------------------------
-# Vispy visual smoke tests
-# ---------------------------------------------------------------------------
-
-
-def test_vispy_overlay_created_by_canvas(viewer_with_layers):
-    """
-    Canvas creates VispyLayerAnnotatorOverlay when overlay.visible=True.
-    (napari defers vispy overlay creation until visible=True.)
-    """
-    viewer, l1, _l2 = viewer_with_layers
-    _ = LayerAnnotatorManager(
-        viewer, visible=True
-    )  # visible=True → canvas creates visual
+def test_vispy_overlay_all_positions(viewer, manager):
+    l1, _ = viewer.layers
+    manager.update_settings(show_background=True, show_outline=True)
     canvas = viewer.window._qt_viewer.canvas
-    overlay_model = l1._overlays[OVERLAY_KEY]
-    layer_visuals = canvas._layer_overlay_to_visual.get(l1, {})
-    if overlay_model not in layer_visuals:
-        pytest.skip(
-            "Canvas did not create vispy overlay (headless / deferred)"
-        )
-    vispy_ov = layer_visuals[overlay_model]
-    assert isinstance(vispy_ov, VispyLayerAnnotatorOverlay)
+    visual = canvas._layer_overlay_to_visual[l1][l1._overlays[KEY]]
+    assert isinstance(visual, VispyLayerAnnotatorOverlay)
+    assert visual.node.parent is canvas.layer_to_visual[l1].node.parent
+    for position in CanvasPosition:
+        manager.update_settings(position=position)
+        assert visual.node.visible
+    viewer.canvas.grid.enabled = True
+    assert visual.node.visible
+    viewer.canvas.grid.enabled = False
 
 
-def test_vispy_overlay_reparented_to_scene(viewer_with_layers):
-    """
-    After creation the vispy node must be in the ViewBox scene
-    (sibling of layer nodes), NOT a child of the layer node.
-    """
-    viewer, l1, _l2 = viewer_with_layers
-    _ = LayerAnnotatorManager(viewer, visible=True)
+def test_vispy_layer_color_matches_native(viewer, manager):
+    l1, _ = viewer.layers
+    l1.colormap = "green"
+    manager.update_settings(use_layer_color=True)
     canvas = viewer.window._qt_viewer.canvas
-    overlay_model = l1._overlays[OVERLAY_KEY]
-    layer_visuals = canvas._layer_overlay_to_visual.get(l1, {})
-    vispy_ov = layer_visuals.get(overlay_model)
-    if vispy_ov is None:
-        pytest.skip(
-            "Canvas did not create vispy overlay (headless / deferred)"
-        )
-    layer_vispy_node = canvas.layer_to_visual[l1].node
-    assert (
-        vispy_ov.node.parent is not layer_vispy_node
-    ), "Overlay node is still a child of the layer node — additive blending will break"
+    node = canvas._layer_overlay_to_visual[l1][l1._overlays[KEY]].node
+    color = np.asarray(node.text.color.rgba).ravel()
+    assert color[1] > 0.9 and color[0] < 0.1  # green
+
+
+def test_labels_stack_without_overlapping(viewer, manager):
+    canvas = viewer.window._qt_viewer.canvas
+    tops = []
+    for layer in viewer.layers:
+        node = canvas._layer_overlay_to_visual[layer][layer._overlays[KEY]]
+        tops.append(node.node.text.pos[0][1])
+    height = canvas._layer_overlay_to_visual[viewer.layers[0]][
+        viewer.layers[0]._overlays[KEY]
+    ].node.height()
+    assert abs(tops[0] - tops[1]) == pytest.approx(height)

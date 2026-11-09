@@ -1,441 +1,286 @@
-"""
-This module contains the TimestampOverlay class and the VispyTimestampOverlay class.
+"""Timestamp labels with an optional Fiji-style time bar.
 
-GRID MODE FIX
--------------
-In napari >= 0.6.2, grid mode uses per-layer ViewBoxes.  Layers no longer
-have world-space translations for their grid positions, so _find_grid_offsets()
-returns zeros, making x_max/y_max cover only one layer's extent instead of the
-full grid.
-
-Fix: when grid mode is active and display_on_scene=True, treat positioning
-exactly like display_on_scene=False (canvas-space, parent = canvas.view,
-bounds = canvas pixel size).  The timestamp appears once, correctly sized and
-placed across the full canvas.
-
-In non-grid mode the existing scene-space behaviour is unchanged.
-
-Also added connections to viewer.grid.events.enabled/shape/stride/spacing so
-the overlay repositions correctly whenever the grid configuration changes.
+The timestamp is attached to layers like the layer names: by default it is
+drawn once on the topmost selected layer, or on every selected layer when
+grid mode is on (one per grid cell).  Fixed on screen it uses
+:class:`TimestampTextOverlay`, napari's text overlay plus the time bar.
 """
 
-import contextlib
-import warnings
-from typing import Union
+from __future__ import annotations
 
-from napari._vispy.overlays.base import (
-    ViewerOverlayMixin,
-    VispySceneOverlay,
-)
+from typing import TYPE_CHECKING, Any, Literal, get_args
+
+from napari._vispy.overlays.text import _VispyLayerTextOverlay
+from napari._vispy.utils.gl import BLENDING_MODES
+from napari._vispy.utils.visual import overlay_to_visual
 from napari.components._viewer_constants import CanvasPosition
-from napari.components.overlays import SceneOverlay
+from napari.components.overlays import TextOverlay
 from napari.utils.color import ColorValue
-from napari.utils.events import disconnect_events
 from pydantic import ConfigDict
-from vispy.color import ColorArray
-from vispy.visuals.transforms import STTransform
+from vispy.scene.visuals import Mesh
 
-from napari_timestamper.text_visual import TextWithBoxVisual
+from napari_timestamper._label import (
+    LabelManager,
+    LabelStyle,
+    VispyLabelOverlay,
+    rects_mesh_data,
+)
+
+if TYPE_CHECKING:
+    from napari.components import ViewerModel
+    from napari.layers import Layer
+
+TimeFormat = Literal[
+    "HH:MM:SS",
+    "HH:MM:SS.ss",
+    "HH:MM",
+    "H:M:S",
+    "H:M",
+    "H:M:S.ss",
+    "MM:SS",
+    "MM:SS.ss",
+    "M:S",
+    "M:S.ss",
+    "SS",
+    "SS.ss",
+    "F",
+]
+TIME_FORMATS: tuple[str, ...] = get_args(TimeFormat)
 
 
-class TimestampOverlay(SceneOverlay):
+def format_time(seconds: float, time_format: str) -> str:
+    """Format ``seconds`` according to one of :data:`TIME_FORMATS`.
+
+    Negative times (e.g. relative to a stimulus) get a leading minus sign.
+    Minutes in the ``MM``/``M`` formats are total minutes, so they do not
+    wrap after an hour.
     """
-    Timestamp Overlay.
+    if time_format not in TIME_FORMATS:
+        raise ValueError(f"Unknown time format: {time_format!r}")
+    fractional = time_format.endswith(".ss")
+    t = round(abs(seconds), 2 if fractional else 0)
+    sign = "-" if seconds < 0 and t > 0 else ""
+    hours, rest = divmod(t, 3600)
+    minutes, secs = divmod(rest, 60)
+    hours, minutes, total_minutes = int(hours), int(minutes), int(t // 60)
+    sec_padded = f"{secs:05.2f}" if fractional else f"{int(secs):02d}"
+    sec_plain = f"{secs:.2f}" if fractional else f"{int(secs)}"
+
+    if time_format.startswith("HH:MM:SS"):
+        body = f"{hours:02d}:{minutes:02d}:{sec_padded}"
+    elif time_format == "HH:MM":
+        body = f"{hours:02d}:{minutes:02d}"
+    elif time_format.startswith("H:M:S"):
+        body = f"{hours}:{minutes}:{sec_plain}"
+    elif time_format == "H:M":
+        body = f"{hours}:{minutes}"
+    elif time_format.startswith("MM:SS"):
+        body = f"{total_minutes:02d}:{sec_padded}"
+    elif time_format.startswith("M:S"):
+        body = f"{total_minutes}:{sec_plain}"
+    elif time_format == "SS":
+        body = f"{t:02.0f}"
+    elif time_format == "SS.ss":
+        body = f"{t:05.2f}"
+    else:  # "F"
+        body = f"{t:.0f}"
+    return sign + body
+
+
+def current_frame(viewer: ViewerModel, axis: int) -> tuple[int, int]:
+    """Return ``(frame, n_frames)`` along ``axis``, or ``(0, 1)`` if the axis
+    does not exist or is currently displayed (i.e. not a slider)."""
+    dims = viewer.dims
+    if 0 <= axis < dims.ndim and axis in dims.not_displayed:
+        return int(dims.current_step[axis]), int(dims.nsteps[axis])
+    return 0, 1
+
+
+class TimestampOverlay(LabelStyle):
+    """Timestamp settings.
+
+    Offsets (``x_spacer``/``y_spacer``) and ``bar_thickness`` are in image
+    pixels when attached to the image, screen pixels for the bar otherwise.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    color: ColorValue = (0, 1, 0, 1)
-    size: int = 10
-    bold: bool = False
-    italic: bool = False
-    prefix: str = ""
-    custom_suffix: Union[str, None] = None
-    time: int = 0
-    start_time: int = 0
-    step_size: float = 1
-    time_format: str = "MM:SS"
-    bg_color: ColorArray = ColorArray("black")
-    show_outline: bool = False
-    outline_color: ColorArray = ColorArray("white")
-    outline_thickness: float = 1
-    show_background: bool = True
-    y_spacer: int = 0
-    x_spacer: int = 0
-    time_axis: int = 0
     position: CanvasPosition = CanvasPosition.BOTTOM_RIGHT
-    scale_with_zoom: bool = True
-    display_on_scene: bool = True
+    prefix: str = ""
+    suffix: str = ""
+    start_time: float = 0
+    step_size: float = 1
+    time_format: TimeFormat = "HH:MM:SS"
+    time_axis: int = 0
+    x_spacer: float = 0
+    y_spacer: float = 0
+    show_bar: bool = False
+    bar_color: ColorValue = "white"
+    bar_thickness: float = 4
 
-    def _timestamp_string(self):
-        timestamp = self._format_timestamp(self.time, self.time_format)
-        suffix = self.custom_suffix if self.custom_suffix else self.time_format
-        return f"{self.prefix} {timestamp} {suffix}"
+    def format_text(self, frame: int) -> str:
+        seconds = self.start_time + frame * self.step_size
+        parts = (self.prefix, format_time(seconds, self.time_format))
+        return " ".join(p for p in (*parts, self.suffix) if p)
 
-    def _format_timestamp(self, total_time, format_specifier):
-        t = float(self.start_time + self.time * self.step_size)
-        hours = int(t // 3600)
-        minutes_mod = int((t % 3600) // 60)
-        total_minutes = int(t // 60)
-        seconds = t % 60
+    def progress(self, frame: int, n_frames: int) -> float:
+        return frame / (n_frames - 1) if n_frames > 1 else 0.0
 
-        if format_specifier == "HH:MM:SS":
-            return f"{hours:02}:{minutes_mod:02}:{seconds:02.0f}"
-        elif format_specifier == "HH:MM:SS.ss":
-            return f"{hours:02}:{minutes_mod:02}:{seconds:05.2f}"
-        elif format_specifier == "HH:MM":
-            return f"{hours:02}:{minutes_mod:02}"
-        elif format_specifier == "H:M:S":
-            return f"{hours}:{minutes_mod}:{seconds:.0f}"
-        elif format_specifier == "H:M":
-            return f"{hours}:{minutes_mod}"
-        elif format_specifier == "H:M:S.ss":
-            return f"{hours}:{minutes_mod}:{seconds:.2f}"
-        elif format_specifier == "MM:SS":
-            return f"{minutes_mod:02}:{seconds:02.0f}"
-        elif format_specifier == "MM:SS.ss":
-            return f"{minutes_mod:02}:{seconds:05.2f}"
-        elif format_specifier == "M:S":
-            return f"{total_minutes}:{seconds:.0f}"
-        elif format_specifier == "M:S.ss":
-            return f"{total_minutes}:{seconds:.2f}"
-        elif format_specifier == "SS":
-            return f"{t:02.0f}"
-        elif format_specifier == "SS.ss":
-            return f"{t:05.2f}"
-        elif format_specifier == "F":
-            return f"{t:.0f}"
-        else:
-            raise ValueError(f"Unknown format specifier: {format_specifier}")
 
-    def _get_allowed_format_specifiers():
-        return [
-            "HH:MM:SS",
-            "HH:MM:SS.ss",
-            "HH:MM",
-            "H:M:S",
-            "H:M",
-            "H:M:S.ss",
-            "MM:SS",
-            "MM:SS.ss",
-            "M:S",
-            "M:S.ss",
-            "SS",
-            "SS.ss",
-            "F",
+class VispyTimestampOverlay(VispyLabelOverlay):
+    overlay: TimestampOverlay
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.viewer.dims.events.current_step.connect(self._update)
+
+    def _text(self) -> str:
+        frame, _ = current_frame(self.viewer, self.overlay.time_axis)
+        return self.overlay.format_text(frame)
+
+    def _bar(self):
+        ov = self.overlay
+        if not ov.show_bar:
+            return None
+        progress = ov.progress(*current_frame(self.viewer, ov.time_axis))
+        return progress, ov.bar_thickness, ov.bar_color
+
+    def _offset(self) -> tuple[float, float]:
+        return self.overlay.x_spacer, self.overlay.y_spacer
+
+
+overlay_to_visual[TimestampOverlay] = VispyTimestampOverlay
+
+
+class TimestampTextOverlay(TextOverlay):
+    """napari's text overlay with an optional progress bar under the text."""
+
+    model_config = TextOverlay.model_config | ConfigDict(validate_default=True)
+    bar_progress: float | None = None
+    bar_thickness: float = 4
+    bar_color: ColorValue = "white"
+
+
+class VispyTimestampTextOverlay(_VispyLayerTextOverlay):
+    """Draws the bar like napari draws its box: as a sibling of the text
+    node sharing its transform, and makes room for it in the tile size."""
+
+    overlay: TimestampTextOverlay
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._bar = Mesh()
+        super().__init__(**kwargs)
+
+    def _connect_events(self) -> None:
+        events = self.overlay.events
+        events.text.connect(self._on_text_change)
+        for event in (
+            events.bar_progress,
+            events.bar_thickness,
+            events.bar_color,
+        ):
+            event.connect(self._on_position_change)
+
+    def _on_position_change(self, event=None) -> None:
+        super()._on_position_change()  # sizes the text and the box
+        ov = self.overlay
+        if ov.bar_progress is None:
+            self._bar.visible = False
+            return
+        self._bar.visible = True
+        y = self.y_size + 2
+        track = (*ov.bar_color[:3], ov.bar_color[3] * 0.35)
+        rects = [
+            (0, y, self.x_size, ov.bar_thickness, track),
+            (
+                0,
+                y,
+                self.x_size * ov.bar_progress,
+                ov.bar_thickness,
+                ov.bar_color,
+            ),
         ]
+        vertices, faces, colors = rects_mesh_data(rects)
+        self._bar.set_data(
+            vertices=vertices, faces=faces, vertex_colors=colors
+        )
+        self.y_size += 2 + ov.bar_thickness
+        # resize the box and re-tile with the bar included
+        self._on_box_change()
+        self.viewer.canvas.events._overlay_positions_changed()
+
+    def _on_box_change(self) -> None:
+        super()._on_box_change()
+        self._bar.parent = (
+            self.node.parent if self._should_be_visible() else None
+        )
+        self._bar.transform = self.node.transform
+        self._bar.order = self.node.order
+
+    def _on_blending_change(self) -> None:
+        super()._on_blending_change()
+        self._bar.set_gl_state(**BLENDING_MODES[self.overlay.blending])
+
+    def close(self) -> None:
+        super().close()
+        self._bar.parent = None
+
+
+overlay_to_visual[TimestampTextOverlay] = VispyTimestampTextOverlay
+
+
+class TimestampManager(LabelManager):
+    """Timestamp on the topmost selected layer (every selected layer in grid
+    mode), attached to the image or fixed on screen."""
+
+    KEY = "timestamp"
+    SCREEN_KEY = "timestamp_screen"
+    style_class = TimestampOverlay
+    style: TimestampOverlay
+
+    def __init__(self, viewer: ViewerModel, **settings: Any) -> None:
+        super().__init__(viewer, **settings)
+        viewer.dims.events.current_step.connect(self._on_step)
 
     @property
-    def text(self):
-        return self._timestamp_string()
+    def overlay(self) -> TimestampOverlay:
+        return self.style
 
+    def text(self) -> str:
+        frame, _ = current_frame(self.viewer, self.style.time_axis)
+        return self.style.format_text(frame)
 
-class VispyTimestampOverlay(ViewerOverlayMixin, VispySceneOverlay):
-    """
-    Vispy Timestamp Overlay.
-    """
+    def _shown(self) -> list[Layer]:
+        # once per view (grid cell): on its topmost selected visible layer
+        shown = [ly for ly in super()._shown() if ly.visible]
+        return [cell[-1] for cell in self.cells(shown)]
 
-    def __init__(self, *, viewer, overlay, parent=None, **kwargs):
-        super().__init__(
-            node=TextWithBoxVisual(
-                text=overlay.text,
-                color=overlay.color,
-                font_size=overlay.size,
-                pos=(0, 0),
+    def _attach(self, layer: Layer) -> None:
+        super()._attach(layer)
+        layer._overlays[self.SCREEN_KEY] = TimestampTextOverlay()
+
+    def _detach(self, layer: Layer) -> None:
+        super()._detach(layer)
+        layer._overlays.pop(self.SCREEN_KEY, None)
+
+    def _native(self, layer: Layer) -> TimestampTextOverlay:
+        return layer._overlays[self.SCREEN_KEY]
+
+    def _native_values(self, layer: Layer) -> dict[str, Any]:
+        style = self.style
+        frame, n_frames = current_frame(self.viewer, style.time_axis)
+        return {
+            **style.native_style(),
+            "text": style.format_text(frame),
+            "bar_progress": (
+                style.progress(frame, n_frames) if style.show_bar else None
             ),
-            viewer=viewer,
-            overlay=overlay,
-            parent=parent,
-            **kwargs,
-        )
-        self.anchor_correction = 0.5
-        self.y_spacer = self.overlay.y_spacer
-        self.x_spacer = self.overlay.x_spacer
-        self.x_size = 0
-        self.y_size = 0
-        self.camera_scaling_factor = 1
-        self.node.transform = STTransform()
-        self.overlay.events.position.connect(self._on_position_change)
+            "bar_thickness": style.bar_thickness,
+            "bar_color": style.bar_color,
+        }
 
-        # overlay property callbacks
-        self.overlay.events.color.connect(self._on_color_change)
-        self.overlay.events.size.connect(self._on_size_change)
-        self.overlay.events.bold.connect(self._on_text_change)
-        self.overlay.events.italic.connect(self._on_text_change)
-        self.overlay.events.bg_color.connect(self._on_text_change)
-        self.overlay.events.show_background.connect(self._on_text_change)
-        self.overlay.events.show_outline.connect(self._on_text_change)
-        self.overlay.events.outline_color.connect(self._on_text_change)
-        self.overlay.events.outline_thickness.connect(self._on_text_change)
-        self.overlay.events.y_spacer.connect(self._update_offsets)
-        self.overlay.events.x_spacer.connect(self._update_offsets)
-        self.overlay.events.time_format.connect(self._on_text_change)
-        self.overlay.events.start_time.connect(self._on_time_change)
-        self.overlay.events.step_size.connect(self._on_time_change)
-        self.overlay.events.prefix.connect(self._on_text_change)
-        self.overlay.events.custom_suffix.connect(self._on_text_change)
-        self.overlay.events.time_axis.connect(self._on_text_change)
-        self.overlay.events.scale_with_zoom.connect(self._on_size_change)
-        self.overlay.events.display_on_scene.connect(self._on_position_change)
+    def _on_step(self, event=None) -> None:
+        for layer in list(self._native_saved):  # natives currently shown
+            self._native(layer).update(self._native_values(layer))
 
-        # viewer callbacks
-        self.viewer.dims.events.current_step.connect(self._on_time_change)
-        self.viewer.camera.events.zoom.connect(self._on_viewer_zoom_change)
-        self.viewer.dims.events.ndisplay.connect(self._on_text_change)
-
-        # Grid events: _on_position_change handles the canvas/scene switch
-        self.viewer.grid.events.enabled.connect(self._on_position_change)
-        self.viewer.grid.events.shape.connect(self._on_position_change)
-        self.viewer.grid.events.stride.connect(self._on_position_change)
-        self.viewer.grid.events.spacing.connect(self._on_position_change)
-
-        self.node.events.parent_change.connect(self._on_parent_change)
-        self.reset()
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _in_grid_scene_mode(self) -> bool:
-        """
-        True when grid mode is active AND display_on_scene is True.
-
-        In this state we fall back to canvas-space positioning because
-        layer world-space translations are no longer meaningful in the
-        ViewBox-based grid (each layer is at origin inside its own ViewBox).
-        """
-        return self.viewer.grid.enabled and self.overlay.display_on_scene
-
-    def _canvas_bounds(self):
-        """Return (x_max, y_max) in canvas pixels."""
-        try:
-            h, w = self.viewer.window._qt_viewer.canvas.size
-            return w, h
-        except (AttributeError, TypeError):
-            return 1, 1
-
-    def _scene_bounds(self):
-        """Return (x_max, y_max) in scene/world units for non-grid mode."""
-        return (
-            self.viewer.dims.range[-1][-2],
-            self.viewer.dims.range[-2][-2],
-        )
-
-    # ------------------------------------------------------------------
-    # Callbacks
-    # ------------------------------------------------------------------
-
-    def _update_offsets(self, event=None):
-        self.x_spacer = self.overlay.x_spacer
-        self.y_spacer = self.overlay.y_spacer
-        self._on_position_change()
-
-    def _on_parent_change(self, event):
-        if event.old is not None:
-            with contextlib.suppress(AttributeError):
-                disconnect_events(self, event.old.canvas)
-
-        if event.new is not None and self.node.canvas is not None:
-            event.new.canvas.events.resize.connect(self._on_position_change)
-
-        self._on_viewer_zoom_change()
-        self._on_text_change()
-
-    def _on_viewer_zoom_change(self, event=None):
-        self.camera_scaling_factor = self.viewer.camera.zoom
-        self._on_size_change()
-
-    def _on_color_change(self, event=None):
-        self.node.color = self.overlay.color
-
-    def get_max_layer_scale(self):
-        layer_scales = []
-        for layer in self.viewer.layers:
-            if hasattr(layer, "scale"):
-                layer_scales.append(layer.scale[-1])
-        return (
-            max(layer_scales)
-            if layer_scales and self.overlay.display_on_scene
-            else 1
-        )
-
-    def _on_position_change(self, event=None):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            position = self.overlay.position
-            if self.node.canvas is None:
-                return
-
-            canvas = self.viewer.window._qt_viewer.canvas
-            in_grid_scene = self._in_grid_scene_mode()
-
-            # ----------------------------------------------------------
-            # Choose coordinate space and parent
-            # ----------------------------------------------------------
-            if not self.overlay.display_on_scene or in_grid_scene:
-                # Canvas-space: display_on_scene=False  OR  grid mode.
-                # In grid mode, world-space translations between layers are
-                # gone (each ViewBox has its own origin), so we use the full
-                # canvas size to position correctly across the entire grid.
-                self.anchor_correction = 0
-                x_max, y_max = self._canvas_bounds()
-                target_parent = canvas.view
-            else:
-                # Scene-space (non-grid, display_on_scene=True)
-                self.anchor_correction = 0.5
-                x_max, y_max = self._scene_bounds()
-                target_parent = canvas.view.scene
-
-            if self.node.parent is not target_parent:
-                self.node.parent = target_parent
-
-        max_layer_scale = self.get_max_layer_scale()
-        ac = self.anchor_correction * max_layer_scale
-
-        # Label height in current coordinate units (world units in scene mode,
-        # pixels in canvas mode). anchor_y="bottom" (dy=0) means rect extends
-        # DOWNWARD from pos_y; placing pos_y = y_max - label_h puts the rect
-        # flush with the bottom edge, same as the layer annotator overlay.
-        label_h = self.overlay.size * TextWithBoxVisual.RECTANGLE_SCALER
-
-        if position == CanvasPosition.TOP_LEFT:
-            anchors = ("left", "bottom")
-            transform = [self.x_spacer - ac, self.y_spacer - ac, 0, 0]
-
-        elif position == CanvasPosition.TOP_RIGHT:
-            anchors = ("right", "bottom")
-            transform = [
-                x_max - self.x_size - self.x_spacer + ac,
-                self.y_spacer - ac,
-                0,
-                0,
-            ]
-
-        elif position == CanvasPosition.TOP_CENTER:
-            anchors = ("center", "bottom")
-            transform = [
-                x_max / 2 - self.x_size / 2 + self.x_spacer,
-                self.y_spacer - ac,
-                0,
-                0,
-            ]
-
-        elif position == CanvasPosition.BOTTOM_RIGHT:
-            # anchor_y="bottom" (dy=0): rect extends DOWNWARD from pos_y.
-            # pos_y = y_max - label_h places rect flush with the bottom edge.
-            anchors = ("right", "bottom")
-            transform = [
-                x_max - self.x_size - self.x_spacer + ac,
-                y_max - label_h - self.y_spacer,
-                0,
-                0,
-            ]
-
-        elif position == CanvasPosition.BOTTOM_LEFT:
-            anchors = ("left", "bottom")
-            transform = [
-                self.x_spacer - ac,
-                y_max - label_h - self.y_spacer,
-                0,
-                0,
-            ]
-
-        elif position == CanvasPosition.BOTTOM_CENTER:
-            anchors = ("center", "bottom")
-            transform = [
-                x_max / 2 - self.x_size / 2 + self.x_spacer,
-                y_max - label_h - self.y_spacer,
-                0,
-                0,
-            ]
-
-        self.node.transform.translate = transform
-        self.node.anchors = anchors
-        self.node._rectagles_visual.spacer = self.overlay.x_spacer
-
-        in_3d_scene = (
-            self.viewer.dims.ndisplay == 3 and self.overlay.display_on_scene
-        )
-        self.node.show_background = (
-            False if in_3d_scene else self.overlay.show_background
-        )
-        self.node.show_outline = (
-            False if in_3d_scene else self.overlay.show_outline
-        )
-
-        # box_width spans the full width of whatever space we're in
-        box_width = (
-            x_max + max_layer_scale  # scene-space: add pixel-centre margin
-            if self.overlay.display_on_scene and not in_grid_scene
-            else x_max
-        )
-
-        self.node.update_data(
-            text=[self.overlay.text],
-            color=[self.overlay.color],
-            bgcolor=self.overlay.bg_color.rgba.tolist(),
-            font_size=self.overlay.size,
-            pos=(0, 0),
-            box_width=[box_width],
-        )
-
-    def _on_size_change(self, event=None):
-        in_grid_scene = self._in_grid_scene_mode()
-        # Effective "on_scene": True only when in non-grid scene mode
-        on_scene = self.overlay.display_on_scene and not in_grid_scene
-
-        if in_grid_scene:
-            # Canvas-space in grid mode: no zoom scaling of size
-            self.node.scale_factor = 1
-            self.node.rectangles_scale_factor = 1
-        elif self.overlay.scale_with_zoom and on_scene:
-            self.node.scale_factor = self.camera_scaling_factor
-            self.node.rectangles_scale_factor = 1
-        elif not self.overlay.scale_with_zoom and not on_scene:
-            self.node.scale_factor = 1
-            self.node.rectangles_scale_factor = 1
-        elif not self.overlay.scale_with_zoom and on_scene:
-            self.node.scale_factor = 1
-            self.node.rectangles_scale_factor = (
-                1 / self.camera_scaling_factor
-                if self.camera_scaling_factor
-                else 1
-            )
-        elif self.overlay.scale_with_zoom and not on_scene:
-            self.node.scale_factor = self.camera_scaling_factor
-            self.node.rectangles_scale_factor = self.camera_scaling_factor
-
-        self.node.font_size = self.overlay.size
-        self.node.outline_thickness = self.overlay.outline_thickness
-        self._on_position_change()
-
-    def _on_text_change(self, event=None):
-        in_3d_scene = (
-            self.viewer.dims.ndisplay == 3 and self.overlay.display_on_scene
-        )
-        self.node.show_background = (
-            False if in_3d_scene else self.overlay.show_background
-        )
-        self.node.show_outline = (
-            False if in_3d_scene else self.overlay.show_outline
-        )
-        self.node.text = self.overlay.text
-        self.node.bold = self.overlay.bold
-        self.node.italic = self.overlay.italic
-        self.node.bgcolor = self.overlay.bg_color.rgba.tolist()
-        self.node.outline_color = self.overlay.outline_color.rgba.tolist()
-        self.node.outline_thickness = self.overlay.outline_thickness
-
-    def _on_time_change(self, event=None):
-        self.overlay.time = self.viewer.dims.current_step[
-            self.overlay.time_axis
-        ]
-        self.node.text = self.overlay.text
-
-    def reset(self):
-        super().reset()
-        self._on_color_change()
-        self._on_size_change()
-        self._on_position_change()
-        self._on_text_change()
-        self._on_time_change()
+    def close(self) -> None:
+        self.viewer.dims.events.current_step.disconnect(self._on_step)
+        super().close()
