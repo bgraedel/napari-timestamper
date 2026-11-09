@@ -7,68 +7,104 @@
 [![codecov](https://codecov.io/gh/bgraedel/napari-timestamper/branch/main/graph/badge.svg)](https://codecov.io/gh/bgraedel/napari-timestamper)
 <!-- [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-timestamper)](https://napari-hub.org/plugins/napari-timestamper) -->
 
-A collection of useful widgets to annotate images with overlays and export them as rgb images/movies.
+Label [napari] views with timestamps and layer names, and export them as
+images or movies.
 
-With this plugin you can:
-- Annotate Layers with their respective names and colors
-- Annotate Layers with a timestamp
-- Export the annotated layers as an RGB image or a movie
-- Convert Layers to RGB stacks and add them back to the viewer
+![Timelapse exported with napari-timestamper: layer names, timestamp and time bar](https://raw.githubusercontent.com/bgraedel/napari-timestamper/main/docs/images/timestamp_layer_names.gif)
 
-uses some private overlay functionality, so may break in the future
+## Features
 
-## Demos
-### Annotate Layers with their respective names and colors
-![layer_annotator](https://github.com/user-attachments/assets/defb1778-eb17-4607-b006-9a9e69154b9d)
+All widgets are under **Plugins › Timestamper**.
 
-### Annotate Layers with a timestamp
-![timestamp](https://github.com/user-attachments/assets/7108a3e1-6bd5-4a55-838f-9359b6f3a78b)
+| Widget | What it does |
+|---|---|
+| **Timestamp** | Time label in formats such as `HH:MM:SS` or `MM:SS.ss`, with a start offset (negative times allowed), prefix/suffix and live preview. **From data** reads the frame interval from the layers' time scale and units, e.g. `scale=(0.5, 1, 1), units=("min", "um", "um")` gives 30 s. **Show on** picks the layers it is drawn on. Optional **time bar**, like Fiji's *Time Bar*: a progress bar as wide as the time, directly under it. |
+| **Layer names** | Labels each layer with its name, in the layer's colormap color (the same rule napari uses) or a fixed color. Choose which layers get a label. |
+| **Export (image / movie)** | Renders the view, including all labels, along a slider axis to mp4 (H.264), gif, tif or a png/jpeg series. Frame range, frame rate, upscaling and a cancellable progress dialog. |
+| **Convert to RGB layer** | Renders selected layers into a new RGB layer. |
+| **Split stack** | Splits a layer along an axis into separate layers. |
 
-----------------------------------
+![napari with the Layer names widget](https://raw.githubusercontent.com/bgraedel/napari-timestamper/main/docs/images/window.png)
 
-This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template.
+### Display modes
+
+Timestamps and layer names have two modes:
+
+- **Attached to image (for export)**: drawn inside the layer and scaled with
+  it, so an export looks the same regardless of zoom, export size or screen.
+  Supports bold/italic, outlines and offsets.
+- **Fixed on screen**: napari's own text overlays, at a constant screen size
+  and tiled with the scale bar and other canvas overlays.
+
+Both modes support backgrounds and the time bar.
+
+### Grid mode
+
+In grid mode every layer gets its own label, and the timestamp is drawn on
+every checked layer. Without grid mode it is drawn once, on the topmost
+checked layer.
+
+![Grid mode: one label and timestamp per layer](https://raw.githubusercontent.com/bgraedel/napari-timestamper/main/docs/images/grid.png)
+
+### Scripting
+
+```python
+from napari_timestamper import TimestampManager, render_as_rgb, save_image_stack
+
+ts = TimestampManager(viewer, step_size=30, time_format="MM:SS", suffix="min",
+                      show_bar=True)
+ts.visible = True
+frames = render_as_rgb(viewer, axis=0)
+save_image_stack(frames, "exports", "movie", "mp4", fps=10)
+```
+
+`LayerAnnotatorManager` works the same way for layer names.
 
 ## Installation
 
-You can install `napari-timestamper` via [pip]:
+Install from napari's plugin manager (**Plugins › Install/Uninstall Plugins**),
+or with [pip]:
 
     pip install napari-timestamper
 
-
-
-To install latest development version :
+Latest development version:
 
     pip install git+https://github.com/bgraedel/napari-timestamper.git
 
+Requires napari ≥ 0.10 and Python ≥ 3.11. For older napari versions use
+`napari-timestamper<0.7`.
+
+The labels build on napari's private vispy overlay API, so new napari
+releases may need a plugin update.
+
+## What's new in 0.7
+
+- Support for napari 0.10 (the Timestamp widget broke with napari 0.9) and
+  Python 3.11-3.14.
+- New **fixed on screen** mode using napari's native overlays.
+- Fiji-style time bar.
+- The timestamp can be placed on chosen layers.
+- **From data**: frame interval read from the layer scale and units.
+- Export with frame range, cancel button and mp4 out of the box.
+- Label sizes no longer depend on the screen's DPI.
 
 ## Contributing
 
-Contributions are very welcome. Tests can be run with [tox], please ensure
-the coverage at least stays the same before you submit a pull request.
+Contributions are very welcome. Tests can be run with [tox]; please make
+sure the coverage at least stays the same before you submit a pull request.
 
 ## License
 
-Distributed under the terms of the [BSD-3] license,
-"napari-timestamper" is free and open source software
+Distributed under the terms of the [BSD-3] license, "napari-timestamper" is
+free and open source software.
 
 ## Issues
 
-If you encounter any problems, please [file an issue] along with a detailed description.
+If you encounter any problems, please [file an issue] along with a detailed
+description.
 
 [napari]: https://github.com/napari/napari
-[Cookiecutter]: https://github.com/audreyr/cookiecutter
-[@napari]: https://github.com/napari
-[MIT]: http://opensource.org/licenses/MIT
 [BSD-3]: http://opensource.org/licenses/BSD-3-Clause
-[GNU GPL v3.0]: http://www.gnu.org/licenses/gpl-3.0.txt
-[GNU LGPL v3.0]: http://www.gnu.org/licenses/lgpl-3.0.txt
-[Apache Software License 2.0]: http://www.apache.org/licenses/LICENSE-2.0
-[Mozilla Public License 2.0]: https://www.mozilla.org/media/MPL/2.0/index.txt
-[cookiecutter-napari-plugin]: https://github.com/napari/cookiecutter-napari-plugin
-
 [file an issue]: https://github.com/bgraedel/napari-timestamper/issues
-
-[napari]: https://github.com/napari/napari
 [tox]: https://tox.readthedocs.io/en/latest/
 [pip]: https://pypi.org/project/pip/
-[PyPI]: https://pypi.org/

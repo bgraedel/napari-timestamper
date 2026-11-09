@@ -1,30 +1,31 @@
 name: napari-timestamper
 display_name: Timestamper
+visibility: public
 contributions:
   commands:
     - id: napari-timestamper.timestamper
       python_name: napari_timestamper._widget:TimestampWidget
-      title: Make Timestamp Widget
+      title: Open timestamp widget
     - id: napari-timestamper.layer_annotations
       python_name: napari_timestamper._widget:LayerAnnotationsWidget
-      title: Make Timestamp Widget
+      title: Open layer names widget
     - id: napari-timestamper.renderer
       python_name: napari_timestamper._widget:RenderRGBWidget
-      title: Export as RGB
+      title: Open export widget
     - id: napari-timestamper.render_to_layer
       python_name: napari_timestamper._widget:LayertoRGBWidget
-      title: Convert to RGB layer
+      title: Open convert to RGB layer widget
     - id: napari-timestamper.split_stack
       python_name: napari_timestamper._widget:SplitStackWidget
-      title: Split Stack
+      title: Open split stack widget
   widgets:
     - command: napari-timestamper.timestamper
-      display_name: Timestamper
+      display_name: Timestamp
     - command: napari-timestamper.layer_annotations
-      display_name: Layer Annotations
+      display_name: Layer names
     - command: napari-timestamper.renderer
-      display_name: Export RGB stack
+      display_name: Export (image / movie)
     - command: napari-timestamper.render_to_layer
       display_name: Convert to RGB layer
     - command: napari-timestamper.split_stack
-      display_name: Split Stack
+      display_name: Split stack

@@ -1,1065 +1,909 @@
-"""
-Dock widget for napari-timestamper
-"""
+"""Dock widgets for napari-timestamper."""
 
 from __future__ import annotations
 
-import warnings
+from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
+from typing import ClassVar
+from weakref import WeakKeyDictionary
 
 import napari
-from napari._vispy.utils.visual import overlay_to_visual
+import numpy as np
 from napari.components._viewer_constants import CanvasPosition
-from napari.layers import labels
-from qtpy import QtCore, QtGui, QtWidgets
-from qtpy.QtCore import Slot
+from napari.layers import Image, Labels
+from napari.layers.utils.stack_utils import stack_to_images
+from napari.utils.notifications import show_info
+from pint import DimensionalityError
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QColor, QIcon, QPixmap
 from qtpy.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QProgressDialog,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 from superqt import QLabeledSlider
-from vispy.color import ColorArray
 
-from napari_timestamper._layer_annotator_overlay import (
-    LayerAnnotatorManager,
-)
+from napari_timestamper._label import LabelManager, LabelStyle
+from napari_timestamper._layer_annotator_overlay import LayerAnnotatorManager
 from napari_timestamper._timestamp_overlay import (
-    TimestampOverlay,
-    VispyTimestampOverlay,
+    TIME_FORMATS,
+    TimestampManager,
 )
-from napari_timestamper.render_as_rgb import render_as_rgb, save_image_stack
+from napari_timestamper.render_as_rgb import (
+    RenderCancelled,
+    render_as_rgb,
+    save_image_stack,
+)
+
+SCENE_ONLY_TIP = "Only available when attached to the image."
 
 
-class TimestampWidget(QtWidgets.QWidget):
+def _unwrap(viewer):
+    """The real viewer behind napari's ``PublicOnlyProxy``.
+
+    The labels deliberately use private napari API (layer overlays); through
+    the proxy every such access would warn.
     """
-    A widget that provides options for the timestamp overlay in napari viewer.
+    return getattr(viewer, "__wrapped__", viewer)
+
+
+def _connect_layer_names(viewer, slot) -> None:
+    """Call ``slot`` when layers are added, removed, reordered or renamed."""
+
+    def connect(layer):
+        layer.events.name.connect(slot)
+
+    def on_inserted(event):
+        connect(event.value)
+        slot()
+
+    for layer in viewer.layers:
+        connect(layer)
+    events = viewer.layers.events
+    events.inserted.connect(on_inserted)
+    events.removed.connect(slot)
+    events.reordered.connect(slot)
+
+
+# ---------------------------------------------------------------------------
+# Reusable controls
+# ---------------------------------------------------------------------------
+
+
+class ColorButton(QPushButton):
+    """Button showing a color swatch; opens a color dialog when clicked."""
+
+    colorChanged = Signal(str)
+
+    def __init__(self, color="white", parent: QWidget | None = None):
+        super().__init__(parent)
+        self.dialog: QColorDialog | None = None
+        self._color = _qcolor(color)
+        self._refresh()
+        self.clicked.connect(self._open_dialog)
+
+    def color(self) -> str:
+        return self._color.name()
+
+    def setColor(self, color) -> None:
+        color = _qcolor(color)
+        if color.isValid() and color != self._color:
+            self._color = color
+            self._refresh()
+            self.colorChanged.emit(self.color())
+
+    def rgba(self, alpha: float = 1.0) -> tuple[float, float, float, float]:
+        return (*self._color.getRgbF()[:3], alpha)
+
+    def _refresh(self) -> None:
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(self._color)
+        self.setIcon(QIcon(pixmap))
+        self.setText(self._color.name())
+
+    def _open_dialog(self) -> None:
+        self.dialog = QColorDialog(self._color, self)
+        self.dialog.colorSelected.connect(self.setColor)
+        self.dialog.finished.connect(self.dialog.deleteLater)
+        self.dialog.open()
+
+
+def _qcolor(color) -> QColor:
+    """QColor from a name, QColor or RGB(A) floats (alpha dropped)."""
+    if isinstance(color, (str, QColor)):
+        return QColor(color)
+    r, g, b = (float(c) for c in list(color)[:3])
+    return QColor.fromRgbF(r, g, b)
+
+
+class AxisComboBox(QComboBox):
+    """Lists the viewer's slider axes by label.
+
+    The selected axis is remembered by label, so it survives axes being
+    added in front of it, and while no slider is available (e.g. in 3D)
+    nothing changes; ``currentIndexChanged`` only fires when the selected
+    axis really changes.
     """
 
-    overlay_set: bool = False
+    def __init__(
+        self,
+        viewer: napari.viewer.Viewer,
+        none_label: str | None = None,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.viewer = viewer
+        self._none_label = none_label
+        self._wanted: str | None = None  # label of the selected axis
+        self._emitted: tuple = ()  # (label, axis) last announced
+        dims = viewer.dims.events
+        for event in (dims.axis_labels, dims.ndisplay, dims.order, dims.ndim):
+            event.connect(self.refresh)
+        self.currentIndexChanged.connect(self._remember)
+        self.refresh()
+
+    def _remember(self, *_) -> None:
+        self._wanted = self.currentText()
+        self._emitted = (self.currentText(), self.currentData())
+
+    def refresh(self, *_) -> None:
+        dims = self.viewer.dims
+        axes = list(dims.not_displayed)
+        self.blockSignals(True)
+        self.clear()
+        if self._none_label is not None:
+            self.addItem(self._none_label, None)
+        for axis in axes:
+            self.addItem(str(dims.axis_labels[axis]), axis)
+        index = self.findText(self._wanted) if self._wanted else -1
+        if index < 0:  # default to the first slider axis
+            index = int(self._none_label is not None and bool(axes))
+        self.setCurrentIndex(index)
+        self.blockSignals(False)
+        # announce a different axis (or the same one at a new index)
+        if axes and (self.currentText(), self.currentData()) != self._emitted:
+            self.currentIndexChanged.emit(self.currentIndex())
+
+
+class LayerChecklist(QListWidget):
+    """Checkable list of the viewer's layers.
+
+    Check states belong to the layer objects, so they survive renaming and
+    layers being removed and re-added.
+    """
+
+    checkedChanged = Signal()
+
+    def __init__(
+        self,
+        viewer: napari.viewer.Viewer,
+        default_checked: bool,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.viewer = viewer
+        self._default = default_checked
+        self._states: WeakKeyDictionary = WeakKeyDictionary()
+        self._rows: list = []
+        _connect_layer_names(viewer, self.refresh)
+        self.itemChanged.connect(self._on_item_changed)
+        self.refresh()
+
+    def refresh(self, *_) -> None:
+        self.blockSignals(True)
+        self.clear()
+        self._rows = list(reversed(self.viewer.layers))  # napari's order
+        for layer in self._rows:
+            item = QListWidgetItem(layer.name)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if self.is_checked(layer)
+                else Qt.CheckState.Unchecked
+            )
+            self.addItem(item)
+        self.blockSignals(False)
+
+    def _on_item_changed(self, item: QListWidgetItem) -> None:
+        layer = self._rows[self.row(item)]
+        self._states[layer] = item.checkState() == Qt.CheckState.Checked
+        self.checkedChanged.emit()
+
+    def is_checked(self, layer) -> bool:
+        return self._states.get(layer, self._default)
+
+    def set_checked(self, layers: Iterable, checked: bool) -> None:
+        for layer in layers:
+            self._states[layer] = checked
+        self.refresh()
+
+    def checked_layers(self) -> list:
+        return [ly for ly in self.viewer.layers if self.is_checked(ly)]
+
+    def unchecked_layers(self) -> list:
+        return [ly for ly in self.viewer.layers if not self.is_checked(ly)]
+
+
+def _spinbox(
+    low: float,
+    high: float,
+    value: float,
+    suffix: str = "",
+    decimals: int | None = None,
+) -> QSpinBox | QDoubleSpinBox:
+    box = QSpinBox() if decimals is None else QDoubleSpinBox()
+    if decimals is not None:
+        box.setDecimals(decimals)
+    box.setRange(low, high)
+    box.setValue(value)
+    if suffix:
+        box.setSuffix(suffix)
+    return box
+
+
+def _row(*widgets: QWidget) -> QWidget:
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    for widget in widgets:
+        layout.addWidget(widget)
+    return container
+
+
+def _connect(slot, *widgets: QWidget) -> None:
+    """Connect the "value changed" signal of each widget to ``slot``."""
+    for widget in widgets:
+        if isinstance(widget, (QSpinBox, QDoubleSpinBox, QLabeledSlider)):
+            widget.valueChanged.connect(slot)
+        elif isinstance(widget, QLineEdit):
+            widget.textChanged.connect(slot)
+        elif isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(slot)
+        elif isinstance(widget, (QCheckBox, QGroupBox)):
+            widget.toggled.connect(slot)
+        elif isinstance(widget, ColorButton):
+            widget.colorChanged.connect(slot)
+        elif isinstance(widget, LayerChecklist):
+            widget.checkedChanged.connect(slot)
+
+
+class StyleControls(QWidget):
+    """Text style controls shared by the timestamp and layer-name widgets."""
+
+    changed = Signal()
+
+    def __init__(
+        self,
+        style: LabelStyle,
+        color_label: str | QWidget = "Text color",
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.position = QComboBox()
+        self.position.addItems([str(p) for p in CanvasPosition])
+        self.position.setCurrentText(str(style.position))
+        self.font_size = _spinbox(1, 500, int(style.size), " pt")
+        self.font_size.setToolTip(
+            "Font size at 100% zoom. Attached to the image, text is about "
+            "1.33x this many image pixels tall in a 1:1 export."
+        )
+        self.color = ColorButton(style.color)
+        self.bold = QCheckBox("Bold")
+        self.bold.setChecked(style.bold)
+        self.italic = QCheckBox("Italic")
+        self.italic.setChecked(style.italic)
+        self.background = QCheckBox("Background")
+        self.background.setChecked(style.show_background)
+        self.bg_color = ColorButton(style.bg_color)
+        self.opacity = QLabeledSlider(Qt.Orientation.Horizontal)
+        self.opacity.setRange(0, 100)
+        self.opacity.setValue(round(float(style.bg_color[3]) * 100))
+        self.outline = QCheckBox("Outline")
+        self.outline.setChecked(style.show_outline)
+        self.outline_color = ColorButton(style.outline_color)
+        self.outline_size = _spinbox(
+            0.1, 100, style.outline_thickness, " px", 1
+        )
+
+        form = QFormLayout(self)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.addRow("Position", self.position)
+        form.addRow("Size", self.font_size)
+        form.addRow(color_label, self.color)
+        form.addRow(_row(self.bold, self.italic))
+        form.addRow(self.background, self.bg_color)
+        form.addRow("Background opacity", self.opacity)
+        form.addRow(self.outline, self.outline_color)
+        form.addRow("Outline thickness", self.outline_size)
+
+        self._on_scene = style.display_on_scene
+        self._scene_only = (self.bold, self.italic, self.outline)
+        _connect(
+            self._on_change,
+            self.position,
+            self.font_size,
+            self.color,
+            self.bold,
+            self.italic,
+            self.background,
+            self.bg_color,
+            self.opacity,
+            self.outline,
+            self.outline_color,
+            self.outline_size,
+        )
+        self._update_enabled()
+
+    def _on_change(self, *_) -> None:
+        self._update_enabled()
+        self.changed.emit()
+
+    def set_scene_mode(self, on_scene: bool) -> None:
+        self._on_scene = on_scene
+        self._update_enabled()
+
+    def _update_enabled(self) -> None:
+        for widget in self._scene_only:
+            widget.setEnabled(self._on_scene)
+            widget.setToolTip("" if self._on_scene else SCENE_ONLY_TIP)
+        background = self.background.isChecked()
+        self.bg_color.setEnabled(background)
+        self.opacity.setEnabled(background)
+        outline = self._on_scene and self.outline.isChecked()
+        self.outline_color.setEnabled(outline)
+        self.outline_size.setEnabled(outline)
+
+    def settings(self) -> dict:
+        """Values for the ``LabelStyle`` fields (colors as RGBA)."""
+        return {
+            "position": self.position.currentText(),
+            "size": self.font_size.value(),
+            "color": self.color.rgba(),
+            "bold": self.bold.isChecked(),
+            "italic": self.italic.isChecked(),
+            "show_background": self.background.isChecked(),
+            "bg_color": self.bg_color.rgba(self.opacity.value() / 100),
+            "show_outline": self.outline.isChecked(),
+            "outline_color": self.outline_color.rgba(),
+            "outline_thickness": self.outline_size.value(),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Labels
+# ---------------------------------------------------------------------------
+
+
+class _LabelWidget(QWidget):
+    """Show toggle, display mode, layer selection and style for a label.
+
+    All widgets of one kind share the viewer's manager, so a re-opened
+    widget shows (and keeps) the current settings.
+    """
+
+    manager_class: ClassVar[type[LabelManager]]
+    show_text: ClassVar[str]
+    layers_label: ClassVar[str] = "Layers"
 
     def __init__(self, viewer: napari.viewer.Viewer, parent=None):
         super().__init__(parent)
-        self.chosen_color = "white"
-        self.chosen_bgcolor = "black"
-        self.chosen_outline_color = "white"
-        self.viewer = viewer
-        self._setupUi()
-        self._connect_all_changes()
-        self._setup_overlay()
-        # Reflect current grid state immediately on open
-        self._on_grid_mode_change()
-
-    def _setup_overlay(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            try:
-                self.viewer._overlays["timestamp"]
-            except KeyError:
-                overlay_to_visual[TimestampOverlay] = VispyTimestampOverlay
-                self.viewer._overlays["timestamp"] = TimestampOverlay(
-                    visible=True
-                )
-            self.timestamp_overlay = self.viewer._overlays["timestamp"]
-            self._set_timestamp_overlay_options()
-            self.overlay_set = True
-
-    def _toggle_overlay(self):
-        if not self.overlay_set:
-            self._setup_overlay()
-            self.toggle_timestamp.setText("Remove Timestamp")
-            return
-
-        if self.timestamp_overlay.visible:
-            self.timestamp_overlay.visible = False
-            self.toggle_timestamp.setText("Add Timestamp")
-        else:
-            self.timestamp_overlay.visible = True
-            self.toggle_timestamp.setText("Remove Timestamp")
-
-    def _on_grid_mode_change(self, event=None):
-        """
-        Enable / disable scene-specific controls based on grid mode.
-
-        In grid mode the overlay ignores display_on_scene and scale_with_zoom
-        (it always uses canvas-space positioning with a fixed scale).
-        We grey those controls out so the user can see they're inactive,
-        but their Qt values are preserved — re-enabling them when grid mode
-        turns off automatically "recalls" the previous settings.
-        """
-        grid_on = self.viewer.grid.enabled
-
-        for widget in (self.display_on_scene, self.scale_with_zoom):
-            widget.setEnabled(not grid_on)
-
-        self.grid_mode_label.setVisible(grid_on)
-
-        if self.overlay_set:
-            self._set_timestamp_overlay_options()
-
-    def _setupUi(self):
-        self.setObjectName("Timestamp Options")
-        self.gridLayout = QtWidgets.QGridLayout()
-
-        self.time_axis_label = QtWidgets.QLabel("Time Axis")
-        self.time_axis = QtWidgets.QComboBox()
-        self._update_time_axis_combobox()
-
-        self.start_time_label = QtWidgets.QLabel("Start Time")
-        self.start_time = QtWidgets.QSpinBox()
-        self.start_time.setRange(0, 10000)
-        self.start_time.setValue(0)
-
-        self.step_time_label = QtWidgets.QLabel("Step Time")
-        self.step_time = QtWidgets.QDoubleSpinBox()
-        self.step_time.setRange(0, 10000)
-        self.step_time.setValue(1)
-
-        self.prefix_label = QtWidgets.QLabel("Prefix")
-        self.prefix = QtWidgets.QLineEdit()
-        self.prefix.setText("")
-
-        self.suffix_label = QtWidgets.QLabel("Suffix")
-        self.suffix = QtWidgets.QLineEdit()
-        self.suffix.setText("")
-
-        self.position_label = QtWidgets.QLabel("Position")
-        self.position = QtWidgets.QComboBox()
-        self.position.addItems(CanvasPosition)
-        self.position.setCurrentIndex(1)
-
-        self.size_label = QtWidgets.QLabel("Size")
-        self.ts_size = QtWidgets.QSpinBox()
-        self.ts_size.setRange(0, 1000)
-        self.ts_size.setValue(12)
-
-        self.shift_label = QtWidgets.QLabel("XY Shift")
-        self.shiftlayout = QtWidgets.QHBoxLayout()
-        self.x_shift = QtWidgets.QSpinBox()
-        self.x_shift.setRange(-1000, 1000)
-        self.x_shift.setValue(0)
-        self.y_shift = QtWidgets.QSpinBox()
-        self.y_shift.setRange(-1000, 1000)
-        self.y_shift.setValue(0)
-        self.shiftlayout.addWidget(self.x_shift)
-        self.shiftlayout.addWidget(self.y_shift)
-
-        self.time_format_label = QtWidgets.QLabel("Time Format")
-        self.time_format = QtWidgets.QComboBox()
-        self.time_format.addItems(
-            TimestampOverlay._get_allowed_format_specifiers()
+        self.viewer = viewer = _unwrap(viewer)
+        self.manager = self.manager_class.for_viewer(viewer)
+        style = self.manager.style
+        self.show_checkbox = QCheckBox(self.show_text)
+        self.show_checkbox.setChecked(self.manager.visible)
+        self.mode = QComboBox()
+        self.mode.addItem("Attached to image (for export)", True)
+        self.mode.addItem("Fixed on screen", False)
+        self.mode.setCurrentIndex(0 if style.display_on_scene else 1)
+        self.mode.setToolTip(
+            "Attached to image: drawn inside the image and scaled with it, "
+            "so it looks the same in exports.\nFixed on screen: napari's "
+            "canvas overlay with a constant screen size."
         )
+        self.layer_selector = LayerChecklist(viewer, default_checked=True)
+        self.layer_selector.set_checked(self.manager.hidden_layers, False)
+        self.style_controls = StyleControls(style, self._color_label())
 
-        self.color_label = QtWidgets.QLabel("Set Timestamp Color")
-        self.color = QtWidgets.QPushButton("Choose Color")
+        top = QFormLayout()
+        top.addRow("Mode", self.mode)
+        top.addRow(self.layers_label, self.layer_selector)
+        self.layout_ = QVBoxLayout(self)
+        self.layout_.addWidget(self.show_checkbox)
+        self.layout_.addLayout(top)
 
-        self.bgcolor_checkbox = QtWidgets.QCheckBox("Background Color")
-        self.bgcolor_checkbox.setChecked(False)
-        self.bgcolor = QtWidgets.QPushButton("Choose Color")
-        self.bgcolor.setEnabled(False)
+    def _color_label(self) -> str | QWidget:
+        return "Text color"
 
-        self.opacity_label = QtWidgets.QLabel("Background Opacity")
-        self.opacity_slider = QLabeledSlider(QtCore.Qt.Horizontal)
-        self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(100)
-        self.opacity_label.setEnabled(False)
-
-        self.outline_checkbox = QtWidgets.QCheckBox("Outline")
-        self.outline_checkbox.setChecked(False)
-
-        self.outline_color = QtWidgets.QPushButton("Choose Outline Color")
-        self.outline_color.setEnabled(False)
-
-        self.outline_size_label = QtWidgets.QLabel("Outline Size")
-        self.outline_size = QtWidgets.QDoubleSpinBox()
-        self.outline_size.setRange(0, 100)
-        self.outline_size.setValue(0.2)
-
-        self.bold_checkbox = QtWidgets.QCheckBox("Bold")
-        self.bold_checkbox.setChecked(False)
-        self.italic_checkbox = QtWidgets.QCheckBox("Italic")
-        self.italic_checkbox.setChecked(False)
-
-        self.display_on_scene = QtWidgets.QCheckBox("Display on Scene")
-        self.display_on_scene.setChecked(True)
-
-        self.scale_with_zoom = QtWidgets.QCheckBox("Scale with Zoom")
-        self.scale_with_zoom.setChecked(True)
-
-        # Grid mode info label — hidden when grid is off
-        self.grid_mode_label = QtWidgets.QLabel(
-            "Grid mode active: 'Display on Scene' and\n"
-            "'Scale with Zoom' are ignored."
+    def _finish(self, *extra_controls: QWidget) -> None:
+        """Connect all controls and push their initial state."""
+        self.layout_.addStretch()
+        _connect(
+            self._apply,
+            self.show_checkbox,
+            self.mode,
+            self.layer_selector,
+            *extra_controls,
         )
-        self.grid_mode_label.setStyleSheet(
-            "color: orange; font-style: italic;"
+        self.style_controls.changed.connect(self._apply)
+        self._apply()
+
+    def _settings(self) -> dict:
+        """Widget-specific model values (besides the style)."""
+        return {}
+
+    def _apply(self, *_) -> None:
+        on_scene = self.mode.currentData()
+        self.style_controls.set_scene_mode(on_scene)
+        self.manager.update_settings(
+            display_on_scene=on_scene,
+            **self.style_controls.settings(),
+            **self._settings(),
         )
-        self.grid_mode_label.setVisible(False)
-        self.grid_mode_label.setWordWrap(True)
+        self.manager.hidden_layers = self.layer_selector.unchecked_layers()
+        self.manager.visible = self.show_checkbox.isChecked()
 
-        self.toggle_timestamp = QtWidgets.QPushButton("Add Timestamp")
 
-        # Layout
-        self.gridLayout.addWidget(self.time_axis_label, 0, 0)
-        self.gridLayout.addWidget(self.time_axis, 0, 1)
-        self.gridLayout.addWidget(self.start_time_label, 1, 0)
-        self.gridLayout.addWidget(self.start_time, 1, 1)
-        self.gridLayout.addWidget(self.step_time_label, 2, 0)
-        self.gridLayout.addWidget(self.step_time, 2, 1)
-        self.gridLayout.addWidget(self.prefix_label, 3, 0)
-        self.gridLayout.addWidget(self.prefix, 3, 1)
-        self.gridLayout.addWidget(self.suffix_label, 4, 0)
-        self.gridLayout.addWidget(self.suffix, 4, 1)
-        self.gridLayout.addWidget(self.position_label, 5, 0)
-        self.gridLayout.addWidget(self.position, 5, 1)
-        self.gridLayout.addWidget(self.size_label, 6, 0)
-        self.gridLayout.addWidget(self.ts_size, 6, 1)
-        self.gridLayout.addWidget(self.shift_label, 7, 0)
-        self.gridLayout.addLayout(self.shiftlayout, 7, 1)
-        self.gridLayout.addWidget(self.time_format_label, 8, 0)
-        self.gridLayout.addWidget(self.time_format, 8, 1)
-        self.gridLayout.addWidget(self.color_label, 9, 0)
-        self.gridLayout.addWidget(self.color, 9, 1)
-        self.gridLayout.addWidget(self.outline_checkbox, 10, 0)
-        self.gridLayout.addWidget(self.outline_color, 10, 1)
-        self.gridLayout.addWidget(self.outline_size_label, 11, 0)
-        self.gridLayout.addWidget(self.outline_size, 11, 1)
-        self.gridLayout.addWidget(self.bgcolor_checkbox, 12, 0)
-        self.gridLayout.addWidget(self.bgcolor, 12, 1)
-        self.gridLayout.addWidget(self.opacity_label, 13, 0)
-        self.gridLayout.addWidget(self.opacity_slider, 13, 1)
-        self.gridLayout.addWidget(self.bold_checkbox, 14, 0)
-        self.gridLayout.addWidget(self.italic_checkbox, 14, 1)
-        self.gridLayout.addWidget(self.scale_with_zoom, 15, 0)
-        self.gridLayout.addWidget(self.display_on_scene, 15, 1)
-        # Grid mode info label spans both columns
-        self.gridLayout.addWidget(self.grid_mode_label, 16, 0, 1, 2)
-        self.gridLayout.addWidget(self.toggle_timestamp, 17, 0, 1, 2)
-        self.setLayout(self.gridLayout)
+class TimestampWidget(_LabelWidget):
+    """Timestamp with a Fiji-style time bar."""
 
-        self.spacer = QtWidgets.QSpacerItem(
-            20,
-            40,
-            QtWidgets.QSizePolicy.Minimum,
-            QtWidgets.QSizePolicy.Expanding,
+    manager_class = TimestampManager
+    manager: TimestampManager
+    show_text = "Show timestamp"
+    layers_label = "Show on"
+
+    def __init__(self, viewer: napari.viewer.Viewer, parent=None):
+        super().__init__(viewer, parent)
+        viewer = self.viewer
+        self.layer_selector.setToolTip(
+            "Drawn once per view (or grid cell), on its topmost checked layer."
         )
-        self.gridLayout.addItem(self.spacer, 18, 0, 1, 2)
-
-        self._update_color_button_icon(self.color, self.chosen_color)
-        self._update_color_button_icon(self.bgcolor, self.chosen_bgcolor)
-        self._update_color_button_icon(
-            self.outline_color, self.chosen_outline_color
+        ov = self.manager.style
+        self.time_axis = AxisComboBox(viewer)
+        self.start_time = _spinbox(-1e6, 1e6, ov.start_time, " s", 2)
+        self.step_time = _spinbox(0, 1e6, ov.step_size, " s", 3)
+        self.from_data_button = QPushButton("From data")
+        self.from_data_button.setToolTip(
+            "Use the time axis scale (and units) of the loaded layers"
         )
+        self.time_format = QComboBox()
+        self.time_format.addItems(TIME_FORMATS)
+        self.time_format.setCurrentText(ov.time_format)
+        self.prefix = QLineEdit(ov.prefix)
+        self.suffix = QLineEdit(ov.suffix)
+        self.preview = QLabel()
+        self.x_shift = _spinbox(-10000, 10000, int(ov.x_spacer), " px")
+        self.y_shift = _spinbox(-10000, 10000, int(ov.y_spacer), " px")
 
-    def _update_color_button_icon(self, color_button, color_str):
-        pixmap = QtGui.QPixmap(20, 20)
-        pixmap.fill(QtGui.QColor(color_str))
-        color_button.setIcon(QtGui.QIcon(pixmap))
+        self.bar_group = QGroupBox("Time bar (Fiji style)")
+        self.bar_group.setCheckable(True)
+        self.bar_group.setChecked(ov.show_bar)
+        self.bar_color = ColorButton(ov.bar_color)
+        self.bar_thickness = _spinbox(0.5, 1000, ov.bar_thickness, " px", 1)
+        bar_form = QFormLayout(self.bar_group)
+        bar_form.addRow("Color", self.bar_color)
+        bar_form.addRow("Thickness", self.bar_thickness)
 
-    def _toggle_bgcolor(self):
-        if self.bgcolor_checkbox.isChecked():
-            self.bgcolor.setEnabled(True)
-            self.opacity_label.setEnabled(True)
-            self.opacity_slider.setEnabled(True)
-            self._set_timestamp_overlay_options()
-        else:
-            self.bgcolor.setEnabled(False)
-            self.opacity_label.setEnabled(False)
-            self.opacity_slider.setEnabled(False)
-            self._update_color_button_icon(self.bgcolor, "grey")
-            self._set_timestamp_overlay_options()
-
-    def _on_outline_color_combobox_change(self):
-        if not self.outline_checkbox.isChecked():
-            self.outline_color.setEnabled(False)
-            self._update_color_button_icon(self.outline_color, "grey")
-            self.timestamp_overlay.show_outline = False
-        else:
-            self.outline_color.setEnabled(True)
-            self._update_color_button_icon(
-                self.outline_color, self.chosen_outline_color
-            )
-            self.timestamp_overlay.show_outline = True
-            self.timestamp_overlay.outline_color = ColorArray(
-                self.chosen_outline_color
-            )
-
-    def _open_color_dialog(self):
-        self.color_dialog = QtWidgets.QColorDialog(parent=self)
-        self.color_dialog.open(self._set_colour)
-
-    def _open_background_color_dialog(self):
-        self.bg_color_dialog = QtWidgets.QColorDialog(parent=self)
-        self.bg_color_dialog.open(self._set_background_colour)
-
-    def _open_outline_color_dialog(self):
-        self.color_dialog = QtWidgets.QColorDialog(parent=self)
-        self.color_dialog.open(self._set_outline_colour)
-
-    def _set_colour(self):
-        color = self.color_dialog.selectedColor()
-        if color.isValid():
-            self.chosen_color = color.name()
-            self._update_color_button_icon(self.color, self.chosen_color)
-            self._set_timestamp_overlay_options()
-
-    def _set_background_colour(self):
-        color = self.bg_color_dialog.selectedColor()
-        if color.isValid():
-            self.chosen_bgcolor = color.name()
-            self._update_color_button_icon(self.bgcolor, self.chosen_color)
-            self._set_timestamp_overlay_options()
-
-    def _set_outline_colour(self):
-        color = self.color_dialog.selectedColor()
-        if color.isValid():
-            self.chosen_outline_color = color.name()
-            self._update_color_button_icon(
-                self.outline_color, self.chosen_outline_color
-            )
-            self._set_timestamp_overlay_options()
-
-    def _set_timestamp_overlay_options(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            timestamp_overlay = self.viewer._overlays["timestamp"]
-        timestamp_overlay.color = self.chosen_color
-        timestamp_overlay.bold = self.bold_checkbox.isChecked()
-        timestamp_overlay.italic = self.italic_checkbox.isChecked()
-        timestamp_overlay.size = self.ts_size.value()
-        timestamp_overlay.position = self.position.currentText()
-        timestamp_overlay.prefix = self.prefix.text()
-        timestamp_overlay.custom_suffix = (
-            self.suffix.text() if self.suffix else None
+        time_group = QGroupBox("Time")
+        time_form = QFormLayout(time_group)
+        time_form.addRow("Time axis", self.time_axis)
+        time_form.addRow("Start time", self.start_time)
+        time_form.addRow(
+            "Frame interval", _row(self.step_time, self.from_data_button)
         )
-        timestamp_overlay.start_time = self.start_time.value()
-        timestamp_overlay.step_size = self.step_time.value()
-        timestamp_overlay.time_format = self.time_format.currentText()
-        timestamp_overlay.x_spacer = self.x_shift.value()
-        timestamp_overlay.y_spacer = self.y_shift.value()
-        time_axis = self.time_axis.currentData()
-        if time_axis is not None:
-            timestamp_overlay.time_axis = time_axis
-        timestamp_overlay.display_on_scene = self.display_on_scene.isChecked()
-        timestamp_overlay.scale_with_zoom = self.scale_with_zoom.isChecked()
-        timestamp_overlay.bg_color = ColorArray(
-            self.chosen_bgcolor, alpha=self.opacity_slider.value() / 100
-        )
-        timestamp_overlay.show_background = self.bgcolor_checkbox.isChecked()
-        timestamp_overlay.show_outline = self.outline_checkbox.isChecked()
-        timestamp_overlay.outline_color = ColorArray(self.chosen_outline_color)
-        timestamp_overlay.outline_thickness = self.outline_size.value()
+        time_form.addRow("Format", self.time_format)
+        time_form.addRow("Prefix", self.prefix)
+        time_form.addRow("Suffix", self.suffix)
+        time_form.addRow("Preview", self.preview)
 
-    def _update_time_axis_combobox(self, event=None):
-        self.time_axis.clear()
-        for i, axis in enumerate(self.viewer.dims.axis_labels[:-2]):
-            if axis is not None:
-                self.time_axis.addItem(axis, i)
-        if self.time_axis.count() > 0:
-            self.time_axis.setCurrentIndex(0)
+        look_group = QGroupBox("Appearance")
+        look_layout = QVBoxLayout(look_group)
+        look_layout.addWidget(self.style_controls)
+        offsets = QFormLayout()
+        offsets.addRow("Offset (x, y)", _row(self.x_shift, self.y_shift))
+        look_layout.addLayout(offsets)
 
-    def _connect_all_changes(self):
-        for w in (
+        for group in (time_group, look_group, self.bar_group):
+            self.layout_.addWidget(group)
+
+        if not self.manager.visible:  # fresh: use the data's calibration
+            self.fill_step_from_data()
+        self.time_axis.currentIndexChanged.connect(self.fill_step_from_data)
+        self.from_data_button.clicked.connect(self.fill_step_from_data)
+        viewer.dims.events.current_step.connect(self._update_preview)
+        self._finish(
+            self.time_axis,
             self.start_time,
             self.step_time,
-            self.ts_size,
+            self.time_format,
+            self.prefix,
+            self.suffix,
             self.x_shift,
             self.y_shift,
-        ):
-            w.valueChanged.connect(self._set_timestamp_overlay_options)
-        for w in (self.prefix, self.suffix):
-            w.textChanged.connect(self._set_timestamp_overlay_options)
-        for w in (self.position, self.time_format, self.time_axis):
-            w.currentTextChanged.connect(self._set_timestamp_overlay_options)
-
-        self.viewer.layers.events.inserted.connect(
-            self._update_time_axis_combobox
-        )
-        self.viewer.layers.events.removed.connect(
-            self._update_time_axis_combobox
-        )
-        self.toggle_timestamp.clicked.connect(self._toggle_overlay)
-
-        self.color.clicked.connect(self._open_color_dialog)
-        self.color.clicked.connect(self._set_timestamp_overlay_options)
-        self.display_on_scene.stateChanged.connect(
-            self._set_timestamp_overlay_options
-        )
-        self.scale_with_zoom.stateChanged.connect(
-            self._set_timestamp_overlay_options
-        )
-        self.bold_checkbox.stateChanged.connect(
-            self._set_timestamp_overlay_options
-        )
-        self.italic_checkbox.stateChanged.connect(
-            self._set_timestamp_overlay_options
-        )
-        self.bgcolor_checkbox.stateChanged.connect(self._toggle_bgcolor)
-        self.bgcolor.clicked.connect(self._open_background_color_dialog)
-        self.opacity_slider.valueChanged.connect(
-            self._set_timestamp_overlay_options
-        )
-        self.outline_checkbox.stateChanged.connect(
-            self._on_outline_color_combobox_change
-        )
-        self.outline_color.clicked.connect(self._open_outline_color_dialog)
-        self.outline_size.valueChanged.connect(
-            self._set_timestamp_overlay_options
+            self.bar_group,
+            self.bar_color,
+            self.bar_thickness,
         )
 
-        # Grid mode: update widget state whenever grid changes
-        self.viewer.grid.events.enabled.connect(self._on_grid_mode_change)
-        self.viewer.grid.events.shape.connect(self._on_grid_mode_change)
-        self.viewer.grid.events.stride.connect(self._on_grid_mode_change)
+    @property
+    def timestamp_overlay(self):
+        return self.manager.style
+
+    def fill_step_from_data(self, *_) -> None:
+        """Set the frame interval (in seconds) from the time axis scale."""
+        axis = self.time_axis.currentData()
+        if axis is None:
+            return
+        dims = self.viewer.dims
+        step = dims.range[axis].step
+        # uncalibrated axes (e.g. "pixel") are taken to be in seconds
+        with suppress(DimensionalityError):
+            step = (step * dims.units[axis]).to("s").magnitude
+        self.step_time.setValue(step)
+
+    def _settings(self) -> dict:
+        time_axis = self.time_axis.currentData()
+        return {
+            "time_axis": time_axis if time_axis is not None else -1,
+            "start_time": self.start_time.value(),
+            "step_size": self.step_time.value(),
+            "time_format": self.time_format.currentText(),
+            "prefix": self.prefix.text(),
+            "suffix": self.suffix.text(),
+            "x_spacer": self.x_shift.value(),
+            "y_spacer": self.y_shift.value(),
+            "show_bar": self.bar_group.isChecked(),
+            "bar_color": self.bar_color.rgba(),
+            "bar_thickness": self.bar_thickness.value(),
+        }
+
+    def _apply(self, *_) -> None:
+        on_scene = self.mode.currentData()
+        for widget in (self.x_shift, self.y_shift):
+            widget.setEnabled(on_scene)
+            widget.setToolTip("" if on_scene else SCENE_ONLY_TIP)
+        super()._apply()
+        self._update_preview()
+
+    def _update_preview(self, *_) -> None:
+        self.preview.setText(self.manager.text())
 
 
-class LayerAnnotationsWidget(QtWidgets.QWidget):
-    """
-    A widget that provides options for the layer annotator overlay in napari viewer.
-    """
+class LayerAnnotationsWidget(_LabelWidget):
+    """Layer-name labels."""
 
-    overlay_set: bool = False
+    manager_class = LayerAnnotatorManager
+    manager: LayerAnnotatorManager
+    show_text = "Show layer names"
 
     def __init__(self, viewer: napari.viewer.Viewer, parent=None):
-        super().__init__(parent)
-        self.viewer = viewer
-        self.chosen_color = "white"
-        self.chosen_bgcolor = "black"
-        self.chosen_outline_color = "white"
-        self._annotator_manager: LayerAnnotatorManager | None = None
-        self._setupUi()
-        self._connect_all_changes()
-        self._setup_overlay()
-        self._set_layer_annotator_overlay_options()
-        self._on_color_combobox_change()
-        self._on_background_color_combobox_change()
+        super().__init__(viewer, parent)
+        self.layout_.addWidget(self.style_controls)
+        self.color_checkbox.toggled.connect(
+            self.style_controls.color.setDisabled
+        )
+        self.style_controls.color.setDisabled(self.color_checkbox.isChecked())
+        self._finish(self.color_checkbox)
 
-    # ------------------------------------------------------------------
-    # Setup
-    # ------------------------------------------------------------------
-
-    def _setup_overlay(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if self._annotator_manager is None:
-                self._annotator_manager = LayerAnnotatorManager(
-                    self.viewer, visible=True
-                )
-            self._set_layer_annotator_overlay_options()
-            self.overlay_set = True
+    def _color_label(self) -> QWidget:
+        self.color_checkbox = QCheckBox("Use layer colormap")
+        self.color_checkbox.setChecked(self.manager.style.use_layer_color)
+        return self.color_checkbox
 
     @property
     def layer_annotator_overlay(self):
-        """Return the first managed overlay for inspection / testing.
+        """First per-layer overlay (``None`` if there are no layers)."""
+        overlays = self.manager.overlays()
+        return overlays[0] if overlays else None
 
-        Returns None if no layers exist yet.
-        """
-        if self._annotator_manager is None:
-            return None
-        return self._annotator_manager.get_any_overlay()
-
-    # ------------------------------------------------------------------
-    # UI construction  (unchanged)
-    # ------------------------------------------------------------------
-
-    def _setupUi(self):
-        self.setObjectName("Layer Annotator Options")
-        self.gridLayout = QtWidgets.QGridLayout(self)
-
-        self.size_label = QtWidgets.QLabel("Size")
-        self.size_slider = QLabeledSlider(QtCore.Qt.Horizontal)
-        self.size_slider.setRange(1, 100)
-        self.size_slider.setValue(12)
-
-        self.position_label = QtWidgets.QLabel("Position")
-        self.position_combobox = QtWidgets.QComboBox()
-        self.position_combobox.addItems(CanvasPosition)
-
-        self.toggle_visibility_button = QtWidgets.QPushButton(
-            "Toggle Visibility"
-        )
-        self.toggle_visibility_button.setCheckable(True)
-        self.toggle_visibility_button.setChecked(True)
-
-        self.layer_selector_label = QtWidgets.QLabel("Annotate Layers")
-        self.layer_selector = QListWidget()
-        self._update_layer_selector()
-
-        self.gridLayout.addWidget(self.layer_selector_label, 0, 0)
-        self.gridLayout.addWidget(self.layer_selector, 0, 1)
-        self.gridLayout.addWidget(self.size_label, 1, 0)
-        self.gridLayout.addWidget(self.size_slider, 1, 1)
-        self.gridLayout.addWidget(self.position_label, 2, 0)
-        self.gridLayout.addWidget(self.position_combobox, 2, 1)
-        self.gridLayout.addWidget(self.toggle_visibility_button, 11, 0, 1, 2)
-
-        self.color_checkbox = QtWidgets.QCheckBox(
-            "Use Colormap for Image Layers"
-        )
-        self.color_checkbox.setChecked(True)
-        self.gridLayout.addWidget(self.color_checkbox, 5, 0)
-
-        self.color = QtWidgets.QPushButton("Choose Color")
-        self._update_color_button_icon(self.color, self.chosen_color)
-        self.gridLayout.addWidget(self.color, 5, 1)
-
-        self.bold_checkbox = QtWidgets.QCheckBox("Bold")
-        self.bold_checkbox.setChecked(False)
-        self.gridLayout.addWidget(self.bold_checkbox, 6, 0)
-
-        self.italic_checkbox = QtWidgets.QCheckBox("Italic")
-        self.italic_checkbox.setChecked(False)
-        self.gridLayout.addWidget(self.italic_checkbox, 6, 1)
-
-        self.bgcolor_checkbox = QtWidgets.QCheckBox("Show Background Color")
-        self.bgcolor_checkbox.setChecked(False)
-        self.gridLayout.addWidget(self.bgcolor_checkbox, 7, 0)
-
-        self.bgcolor = QtWidgets.QPushButton("Choose Color")
-        self._update_color_button_icon(self.bgcolor, self.chosen_bgcolor)
-        self.gridLayout.addWidget(self.bgcolor, 7, 1)
-
-        self.opacity_label = QtWidgets.QLabel("Background Opacity")
-        self.opacity_slider = QLabeledSlider(QtCore.Qt.Horizontal)
-        self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(100)
-        self.gridLayout.addWidget(self.opacity_label, 8, 0)
-        self.gridLayout.addWidget(self.opacity_slider, 8, 1)
-
-        self.outline_checkbox = QtWidgets.QCheckBox("Show Outline")
-        self.outline_checkbox.setChecked(False)
-        self.outline_color = QtWidgets.QPushButton("Choose Outline Color")
-        self.outline_color.setEnabled(False)
-        self._update_color_button_icon(
-            self.outline_color, self.chosen_outline_color
-        )
-        self.gridLayout.addWidget(self.outline_checkbox, 9, 0)
-        self.gridLayout.addWidget(self.outline_color, 9, 1)
-
-        self.outline_size_label = QtWidgets.QLabel("Outline Size")
-        self.outline_size = QtWidgets.QDoubleSpinBox()
-        self.outline_size.setRange(0, 100)
-        self.outline_size.setValue(0.2)
-        self.gridLayout.addWidget(self.outline_size_label, 10, 0)
-        self.gridLayout.addWidget(self.outline_size, 10, 1)
-
-        self.spacer = QtWidgets.QSpacerItem(
-            20,
-            40,
-            QtWidgets.QSizePolicy.Minimum,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        self.gridLayout.addItem(self.spacer, 12, 0, 1, 2)
-        self.setLayout(self.gridLayout)
-
-        self.size_slider.valueChanged.connect(self._on_size_slider_change)
-        self.toggle_visibility_button.clicked.connect(self._toggle_visibility)
-        self.color_checkbox.stateChanged.connect(
-            self._on_color_combobox_change
-        )
-        self.bgcolor_checkbox.stateChanged.connect(
-            self._on_background_color_combobox_change
-        )
-        self.viewer.layers.events.inserted.connect(self._update_layer_selector)
-        self.viewer.layers.events.removed.connect(self._update_layer_selector)
-        self.layer_selector.itemChanged.connect(
-            self._on_layer_selection_changed
-        )
-
-    # ------------------------------------------------------------------
-    # Layer selector
-    # ------------------------------------------------------------------
-
-    def _update_layer_selector(self, event=None):
-        self.layer_selector.blockSignals(True)
-        selected = self._get_selected_layer_names()
-        self.layer_selector.clear()
-        for layer in self.viewer.layers:
-            item = QListWidgetItem(layer.name)
-            if layer.name in selected or not selected:
-                item.setCheckState(QtCore.Qt.Checked)
-            else:
-                item.setCheckState(QtCore.Qt.Unchecked)
-            self.layer_selector.addItem(item)
-        self.layer_selector.blockSignals(False)
-        self._on_layer_selection_changed()
-
-    def _get_selected_layer_names(self) -> set[str]:
-        return {
-            self.layer_selector.item(i).text()
-            for i in range(self.layer_selector.count())
-            if self.layer_selector.item(i).checkState() == QtCore.Qt.Checked
-        }
-
-    def _on_layer_selection_changed(self, item=None):
-        """Show the overlay only for checked layers."""
-        if not self.overlay_set or self._annotator_manager is None:
-            return
-        selected = self._get_selected_layer_names()
-        for layer in self.viewer.layers:
-            # visible = selected if anything is ticked, otherwise show all
-            should_show = (layer.name in selected) if selected else True
-            self._annotator_manager.set_layer_visible(layer.name, should_show)
-
-    # ------------------------------------------------------------------
-    # Color helpers
-    # ------------------------------------------------------------------
-
-    def _update_color_button_icon(self, color_button, color_str):
-        pixmap = QtGui.QPixmap(20, 20)
-        pixmap.fill(QtGui.QColor(color_str))
-        color_button.setIcon(QtGui.QIcon(pixmap))
-
-    def _on_color_combobox_change(self):
-        use_layer_color = self.color_checkbox.isChecked()
-        self._update_color_button_icon(self.color, self.chosen_color)
-        if self.overlay_set:
-            self._annotator_manager.update_settings(
-                use_layer_color=use_layer_color
-            )
-        self._set_layer_annotator_overlay_options()
-
-    def _on_background_color_combobox_change(self):
-        if not self.bgcolor_checkbox.isChecked():
-            self.bgcolor.setEnabled(False)
-            self._update_color_button_icon(self.bgcolor, "grey")
-            self.opacity_label.setEnabled(False)
-            self.opacity_slider.setEnabled(False)
-            if self.overlay_set:
-                self._annotator_manager.update_settings(show_background=False)
-        else:
-            self.bgcolor.setEnabled(True)
-            self._update_color_button_icon(self.bgcolor, self.chosen_bgcolor)
-            self.opacity_label.setEnabled(True)
-            self.opacity_slider.setEnabled(True)
-            if self.overlay_set:
-                self._annotator_manager.update_settings(
-                    show_background=True,
-                    bg_color=ColorArray(
-                        self.chosen_bgcolor,
-                        alpha=self.opacity_slider.value() / 100,
-                    ),
-                )
-
-    def _on_outline_color_combobox_change(self):
-        if not self.outline_checkbox.isChecked():
-            self.outline_color.setEnabled(False)
-            self._update_color_button_icon(self.outline_color, "grey")
-            if self.overlay_set:
-                self._annotator_manager.update_settings(show_outline=False)
-        else:
-            self.outline_color.setEnabled(True)
-            self._update_color_button_icon(
-                self.outline_color, self.chosen_outline_color
-            )
-            if self.overlay_set:
-                self._annotator_manager.update_settings(
-                    show_outline=True,
-                    outline_color=ColorArray(self.chosen_outline_color),
-                )
-
-    # ------------------------------------------------------------------
-    # Color dialogs
-    # ------------------------------------------------------------------
-
-    def _open_color_dialog(self):
-        self.color_dialog = QtWidgets.QColorDialog(parent=self)
-        self.color_dialog.open(self._set_colour)
-
-    def _open_background_color_dialog(self):
-        self.color_dialog = QtWidgets.QColorDialog(parent=self)
-        self.color_dialog.open(self._set_background_colour)
-
-    def _open_outline_color_dialog(self):
-        self.color_dialog = QtWidgets.QColorDialog(parent=self)
-        self.color_dialog.open(self._set_outline_colour)
-
-    def _set_colour(self):
-        color = self.color_dialog.selectedColor()
-        if color.isValid():
-            self.chosen_color = color.name()
-            self._update_color_button_icon(self.color, self.chosen_color)
-            self._set_layer_annotator_overlay_options()
-
-    def _set_background_colour(self):
-        color = self.color_dialog.selectedColor()
-        if color.isValid():
-            self.chosen_bgcolor = color.name()
-            self._update_color_button_icon(self.bgcolor, self.chosen_bgcolor)
-            self._set_layer_annotator_overlay_options()
-            self._on_background_color_combobox_change()
-
-    def _set_outline_colour(self):
-        color = self.color_dialog.selectedColor()
-        if color.isValid():
-            self.chosen_outline_color = color.name()
-            self._update_color_button_icon(
-                self.outline_color, self.chosen_outline_color
-            )
-            self._set_layer_annotator_overlay_options()
-
-    # ------------------------------------------------------------------
-    # Overlay state
-    # ------------------------------------------------------------------
-
-    def _set_opacity(self):
-        if self.overlay_set:
-            self._annotator_manager.update_settings(
-                bg_color=ColorArray(
-                    self.chosen_bgcolor,
-                    alpha=self.opacity_slider.value() / 100,
-                )
-            )
-
-    def _toggle_visibility(self):
-        if self._annotator_manager is None:
-            return
-        # Derive the new state from the button's checked state.
-        visible = self.toggle_visibility_button.isChecked()
-        self._annotator_manager.set_visible(visible)
-        self.toggle_visibility_button.setText(
-            "Hide Overlay" if visible else "Show Overlay"
-        )
-
-    def _on_size_slider_change(self):
-        if self.overlay_set:
-            self._annotator_manager.update_settings(
-                size=self.size_slider.value()
-            )
-
-    def _set_layer_annotator_overlay_options(self):
-        """Push all current widget values to every managed overlay at once."""
-        if not self.overlay_set or self._annotator_manager is None:
-            return
-        self._annotator_manager.update_settings(
-            position=self.position_combobox.currentText(),
-            color=self.chosen_color,
-            bold=self.bold_checkbox.isChecked(),
-            italic=self.italic_checkbox.isChecked(),
-            show_background=self.bgcolor_checkbox.isChecked(),
-            bg_color=ColorArray(
-                self.chosen_bgcolor,
-                alpha=self.opacity_slider.value() / 100,
-            ),
-            show_outline=self.outline_checkbox.isChecked(),
-            outline_color=ColorArray(self.chosen_outline_color),
-            outline_thickness=self.outline_size.value(),
-            size=self.size_slider.value(),
-            use_layer_color=self.color_checkbox.isChecked(),
-        )
-
-    # ------------------------------------------------------------------
-    # Signal connections
-    # ------------------------------------------------------------------
-
-    def _connect_all_changes(self):
-        self.position_combobox.currentTextChanged.connect(
-            self._set_layer_annotator_overlay_options
-        )
-        self.color.clicked.connect(self._open_color_dialog)
-        self.color.clicked.connect(self._set_layer_annotator_overlay_options)
-        self.bgcolor.clicked.connect(self._open_background_color_dialog)
-        self.bgcolor.clicked.connect(self._set_layer_annotator_overlay_options)
-        self.bold_checkbox.stateChanged.connect(
-            self._set_layer_annotator_overlay_options
-        )
-        self.italic_checkbox.stateChanged.connect(
-            self._set_layer_annotator_overlay_options
-        )
-        self.opacity_slider.valueChanged.connect(self._set_opacity)
-        self.outline_checkbox.stateChanged.connect(
-            self._on_outline_color_combobox_change
-        )
-        self.outline_color.clicked.connect(self._open_outline_color_dialog)
-        self.outline_color.clicked.connect(
-            self._set_layer_annotator_overlay_options
-        )
-        self.outline_size.valueChanged.connect(
-            self._set_layer_annotator_overlay_options
-        )
-
-    # ------------------------------------------------------------------
-    # Teardown
-    # ------------------------------------------------------------------
-
-    def closeEvent(self, event):
-        if self._annotator_manager is not None:
-            self._annotator_manager.close()
-        super().closeEvent(event)
+    def _settings(self) -> dict:
+        return {"use_layer_color": self.color_checkbox.isChecked()}
 
 
-# =============================================================================
-# Remaining widgets — unchanged
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
 
 
 class RenderRGBWidget(QWidget):
+    """Render the viewer (with overlays) to an image, image series or movie."""
+
+    MOVIE_TYPES = ("mp4", "gif")
+
     def __init__(self, viewer: napari.viewer.Viewer, parent=None):
         super().__init__(parent)
-        self.viewer = viewer
-        self.layout = QVBoxLayout(self)
-        self.filepath_label = QLabel("Output Directory:", self)
-        self.layout.addWidget(self.filepath_label)
-        self.filepath_button = QPushButton("Select Directory", self)
-        self.layout.addWidget(self.filepath_button)
-        self.export_type_label = QLabel("Export Type:", self)
-        self.layout.addWidget(self.export_type_label)
-        self.export_type_combobox = QComboBox(self)
-        self.export_type_combobox.addItems(
-            ["mp4", "tif", "png", "jpeg", "gif"]
-        )
-        self.layout.addWidget(self.export_type_combobox)
-        self.axis_label = QLabel("Viewer Axis:", self)
-        self.layout.addWidget(self.axis_label)
-        self.axis_combobox = QComboBox(self)
-        self.axis_combobox.addItem("None", None)
-        self.layout.addWidget(self.axis_combobox)
-        self.name_label = QLabel("Name:", self)
-        self.layout.addWidget(self.name_label)
-        self.name_lineedit = QLineEdit(self)
-        self.name_lineedit.setText("output")
-        self.layout.addWidget(self.name_lineedit)
-        self.scale_label = QLabel("Scale Factor:", self)
-        self.layout.addWidget(self.scale_label)
-        self.scale_spinbox = QDoubleSpinBox(self)
-        self.scale_spinbox.setRange(0, 100)
-        self.scale_spinbox.setValue(1)
-        self.layout.addWidget(self.scale_spinbox)
-        self.frame_interval = QLabel("FPS:", self)
-        self.layout.addWidget(self.frame_interval)
-        self.frame_interval_spinbox = QSpinBox(self)
-        self.frame_interval_spinbox.setRange(1, 1000)
-        self.frame_interval_spinbox.setValue(10)
-        self.layout.addWidget(self.frame_interval_spinbox)
-        self.render_button = QPushButton("Render and Save", self)
-        self.layout.addWidget(self.render_button)
-        self.spacer = QtWidgets.QSpacerItem(
-            20,
-            40,
-            QtWidgets.QSizePolicy.Minimum,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        self.layout.addItem(self.spacer)
-        self.directory = Path()
-        self.update_axis_combobox()
-        self.connect_slots()
+        self.viewer = viewer = _unwrap(viewer)
 
-    def connect_slots(self):
-        self.viewer.layers.events.inserted.connect(self.update_axis_combobox)
-        self.viewer.layers.events.removed.connect(self.update_axis_combobox)
+        self.axis_combobox = AxisComboBox(viewer, none_label="Current view")
+        self.first_frame = QSpinBox()
+        self.last_frame = QSpinBox()
+        self.export_type_combobox = QComboBox()
+        self.export_type_combobox.addItems(
+            ["mp4", "gif", "tif", "png", "jpeg"]
+        )
+        self.frame_interval_spinbox = _spinbox(1, 1000, 10, " fps")
+        self.scale_spinbox = _spinbox(0.1, 100, 1, "x", 1)
+        self.scale_spinbox.setToolTip("Resolution multiplier for the export")
+        self.directory_edit = QLineEdit()
+        self.directory_edit.setPlaceholderText("Choose an output folder…")
+        self.filepath_button = QPushButton("Browse…")
+        self.name_lineedit = QLineEdit("output")
+        self.render_button = QPushButton("Render and save")
+
+        form = QFormLayout()
+        form.addRow("Animate axis", self.axis_combobox)
+        form.addRow(
+            "Frames", _row(self.first_frame, QLabel("to"), self.last_frame)
+        )
+        form.addRow("Format", self.export_type_combobox)
+        form.addRow("Frame rate", self.frame_interval_spinbox)
+        form.addRow("Upscale", self.scale_spinbox)
+        form.addRow("Folder", _row(self.directory_edit, self.filepath_button))
+        form.addRow("File name", self.name_lineedit)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.render_button)
+        layout.addStretch()
+
+        self.axis_combobox.currentIndexChanged.connect(self._reset_frames)
+        viewer.dims.events.range.connect(self._update_frame_limits)
+        self.export_type_combobox.currentTextChanged.connect(
+            self._update_enabled
+        )
         self.filepath_button.clicked.connect(self.on_filepath_button_clicked)
         self.render_button.clicked.connect(self.on_render_button_clicked)
+        self._reset_frames()
 
-    def update_axis_combobox(self):
-        self.axis_combobox.clear()
-        self.axis_combobox.addItem("None", None)
-        choices = []
-        for i, axis in enumerate(self.viewer.dims.axis_labels[:-2]):
-            if axis is not None:
-                choices.append(i)
-                self.axis_combobox.addItem(axis, i)
-        if len(choices) > 0:
-            self.axis_combobox.setCurrentIndex(1)
+    @property
+    def directory(self) -> Path | None:
+        text = self.directory_edit.text().strip()
+        return Path(text) if text else None
 
-    @Slot()
-    def on_filepath_button_clicked(self):
-        self.directory = Path(
-            QFileDialog.getExistingDirectory(self, "Select Directory")
+    @directory.setter
+    def directory(self, path: Path | str | None) -> None:
+        self.directory_edit.setText(str(path) if path else "")
+
+    def _n_frames(self) -> int:
+        axis = self.axis_combobox.currentData()
+        return 1 if axis is None else int(self.viewer.dims.nsteps[axis])
+
+    def _update_frame_limits(self, *_) -> None:
+        # a range ending at the last frame keeps doing so when the axis grows
+        to_end = self.last_frame.value() == self.last_frame.maximum()
+        last = self._n_frames() - 1
+        for box in (self.first_frame, self.last_frame):
+            box.setMaximum(last)
+        if to_end:
+            self.last_frame.setValue(last)
+        self._update_enabled()
+
+    def _reset_frames(self, *_) -> None:
+        self._update_frame_limits()
+        self.first_frame.setValue(0)
+        self.last_frame.setValue(self.last_frame.maximum())
+
+    def _update_enabled(self, *_) -> None:
+        animated = self.axis_combobox.currentData() is not None
+        self.first_frame.setEnabled(animated)
+        self.last_frame.setEnabled(animated)
+        self.frame_interval_spinbox.setEnabled(
+            animated
+            and self.export_type_combobox.currentText() in self.MOVIE_TYPES
         )
-        self.filepath_label.setText(f"Output Directory: {self.directory}")
 
-    @Slot()
-    def on_render_button_clicked(self):
-        rendered_image = render_as_rgb(
-            self.viewer,
-            self.axis_combobox.currentData(),
-            upsample_factor=self.scale_spinbox.value(),
+    def on_filepath_button_clicked(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select output folder", str(self.directory or "")
         )
-        save_image_stack(
-            rendered_image,
+        if directory:
+            self.directory = directory
+
+    def on_render_button_clicked(self) -> None:
+        if self.directory is None:
+            self.on_filepath_button_clicked()
+            if self.directory is None:
+                return
+        axis = self.axis_combobox.currentData()
+        export_type = self.export_type_combobox.currentText()
+        if axis is None and export_type in self.MOVIE_TYPES:
+            show_info(f"Choose an axis to animate for {export_type} export")
+            return
+        frames = None
+        if axis is not None:
+            first, last = self.first_frame.value(), self.last_frame.value()
+            frames = range(min(first, last), max(first, last) + 1)
+
+        progress = QProgressDialog(
+            "Rendering frames…", "Cancel", 0, len(frames or [0]), self
+        )
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(500)
+
+        def callback(done: int, total: int) -> bool:
+            progress.setValue(done)
+            QApplication.processEvents()
+            return not progress.wasCanceled()
+
+        try:
+            image = render_as_rgb(
+                self.viewer,
+                axis,
+                upsample_factor=self.scale_spinbox.value(),
+                frames=frames,
+                callback=callback,
+            )
+        except RenderCancelled:
+            show_info("Export cancelled")
+            return
+        finally:
+            progress.close()
+            progress.deleteLater()
+        path = save_image_stack(
+            image,
             self.directory,
-            self.name_lineedit.text(),
-            self.export_type_combobox.currentText(),
+            self.name_lineedit.text() or "output",
+            export_type,
             self.frame_interval_spinbox.value(),
         )
+        show_info(f"Saved {path}")
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
 
 
 class LayertoRGBWidget(QWidget):
+    """Render selected layers into a new RGB(A) image layer."""
+
     def __init__(self, viewer: napari.viewer.Viewer, parent=None):
         super().__init__(parent)
-        self.viewer = viewer
-        self.layout = QVBoxLayout(self)
-        self.layer_selector_label = QLabel("Select Layer(s) to convert", self)
-        self.layout.addWidget(self.layer_selector_label)
-        self.layer_selector = QListWidget(self)
-        self.layout.addWidget(self.layer_selector)
-        self.name_label = QLabel("Name:", self)
-        self.layout.addWidget(self.name_label)
-        self.name_lineedit = QLineEdit(self)
-        self.name_lineedit.setText("output")
-        self.layout.addWidget(self.name_lineedit)
-        self.render_button = QPushButton("Convert to RGB", self)
-        self.layout.addWidget(self.render_button)
-        self.spacer = QtWidgets.QSpacerItem(
-            20,
-            40,
-            QtWidgets.QSizePolicy.Minimum,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        self.layout.addItem(self.spacer)
-        self.connect_slots()
-        self._update_layer_selector()
+        self.viewer = viewer = _unwrap(viewer)
+        self.layer_selector = LayerChecklist(viewer, default_checked=False)
+        self.name_lineedit = QLineEdit("output")
+        self.render_button = QPushButton("Convert to RGB layer")
+        form = QFormLayout()
+        form.addRow("Layers", self.layer_selector)
+        form.addRow("Name", self.name_lineedit)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.render_button)
+        layout.addStretch()
+        self.render_button.clicked.connect(self.on_render_button_clicked)
 
-    def _update_layer_selector(self):
-        self.layer_selector.clear()
-        for layer in self.viewer.layers:
-            item = QListWidgetItem(layer.name)
-            item.setCheckState(QtCore.Qt.Unchecked)
-            self.layer_selector.addItem(item)
-
-    def _get_selected_layers(self):
-        return [
-            self.viewer.layers[i]
-            for i in range(self.layer_selector.count())
-            if self.layer_selector.item(i).checkState() == QtCore.Qt.Checked
-        ]
-
-    def on_render_button_clicked(self):
-        layers = self._get_selected_layers()
+    def on_render_button_clicked(self) -> None:
+        layers = self.layer_selector.checked_layers()
         if not layers:
+            show_info("Select at least one layer to convert")
             return
         rendered_image = self.render_layers_as_rgb(layers)
         self.viewer.add_image(
             rendered_image, name=self.name_lineedit.text(), rgb=True
         )
 
-    def connect_slots(self):
-        self.viewer.layers.events.inserted.connect(self._update_layer_selector)
-        self.viewer.layers.events.removed.connect(self._update_layer_selector)
-        self.render_button.clicked.connect(self.on_render_button_clicked)
+    def render_layers_as_rgb(self, layers: Iterable) -> np.ndarray:
+        """Render only ``layers`` through every slider position.
 
-    def render_layers_as_rgb(self, layers):
-        temporary_removed_layers = {}
-        for layer_idx, layer in enumerate(self.viewer.layers):
-            if layer in layers:
-                layer.visible = True
-            else:
-                temporary_removed_layers[layer_idx] = self.viewer.layers.pop(
-                    layer_idx
-                )
-        ax = [idx for idx, ax in enumerate(self.viewer.dims.range[:-2])]
-        if not ax:
-            ax = None
+        Other layers are removed while rendering (hidden layers would still
+        count towards the exported extent).
+        """
+        keep = {id(layer) for layer in layers}
+        all_layers = self.viewer.layers
+        others = [
+            (i, ly) for i, ly in enumerate(all_layers) if id(ly) not in keep
+        ]
+        visibility = {id(ly): ly.visible for ly in all_layers}
+        for _, layer in reversed(others):
+            all_layers.remove(layer)
+        for layer in all_layers:
+            layer.visible = True
         try:
-            rendered_image = render_as_rgb(self.viewer, ax, 1)
+            axes = list(self.viewer.dims.not_displayed) or None
+            return render_as_rgb(self.viewer, axes)
         finally:
-            for layer_idx, layer in temporary_removed_layers.items():
-                self.viewer.layers.insert(layer_idx, layer)
-        return rendered_image
+            for index, layer in others:
+                all_layers.insert(index, layer)
+            for layer in all_layers:
+                layer.visible = visibility[id(layer)]
 
 
 class SplitStackWidget(QWidget):
+    """Split a layer along one axis into separate layers."""
+
     def __init__(self, viewer: napari.viewer.Viewer, parent=None):
         super().__init__(parent)
-        self.viewer = viewer
-        self.layout = QVBoxLayout(self)
-        self.layer_label = QLabel("Layer:", self)
-        self.layout.addWidget(self.layer_label)
-        self.layer_combobox = QComboBox(self)
-        self.layout.addWidget(self.layer_combobox)
-        self.axis_label = QLabel("Split Axis:", self)
-        self.layout.addWidget(self.axis_label)
-        self.axis_combobox = QComboBox(self)
-        self.layout.addWidget(self.axis_combobox)
-        self.remove_original_checkbox = QtWidgets.QCheckBox(
-            "Remove original layer"
-        )
+        self.viewer = viewer = _unwrap(viewer)
+        self.layer_combobox = QComboBox()
+        self.axis_combobox = QComboBox()
+        self.remove_original_checkbox = QCheckBox("Remove original layer")
         self.remove_original_checkbox.setChecked(True)
-        self.layout.addWidget(self.remove_original_checkbox)
-        self.split_button = QPushButton("Split", self)
-        self.layout.addWidget(self.split_button)
-        self.spacer = QtWidgets.QSpacerItem(
-            20,
-            40,
-            QtWidgets.QSizePolicy.Minimum,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        self.layout.addItem(self.spacer)
-        self._update_layer_combobox()
-        self._connect_slots()
+        self.split_button = QPushButton("Split")
+        form = QFormLayout()
+        form.addRow("Layer", self.layer_combobox)
+        form.addRow("Split axis", self.axis_combobox)
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.remove_original_checkbox)
+        layout.addWidget(self.split_button)
+        layout.addStretch()
 
-    def _connect_slots(self):
-        self.viewer.layers.events.inserted.connect(self._update_layer_combobox)
-        self.viewer.layers.events.removed.connect(self._update_layer_combobox)
+        _connect_layer_names(viewer, self._update_layer_combobox)
         self.layer_combobox.currentIndexChanged.connect(
             self._update_axis_combobox
         )
         self.split_button.clicked.connect(self._on_split)
+        self._update_layer_combobox()
 
-    def _update_layer_combobox(self, event=None):
+    def _current_layer(self):
+        layer = self.layer_combobox.currentData()
+        return layer if layer in self.viewer.layers else None
+
+    def _update_layer_combobox(self, *_) -> None:
+        current = self.layer_combobox.currentData()
+        self.layer_combobox.blockSignals(True)
         self.layer_combobox.clear()
         for layer in self.viewer.layers:
-            self.layer_combobox.addItem(layer.name)
+            if layer.ndim > 2:
+                self.layer_combobox.addItem(layer.name, layer)
+        index = self.layer_combobox.findData(current)
+        self.layer_combobox.setCurrentIndex(max(index, 0))
+        self.layer_combobox.blockSignals(False)
         self._update_axis_combobox()
 
-    def _update_axis_combobox(self, event=None):
+    def _update_axis_combobox(self, *_) -> None:
         self.axis_combobox.clear()
-        idx = self.layer_combobox.currentIndex()
-        if idx < 0 or idx >= len(self.viewer.layers):
+        layer = self._current_layer()
+        if layer is None:
             return
-        layer = self.viewer.layers[idx]
-        for i in range(layer.data.ndim):
-            axis_labels = self.viewer.dims.axis_labels
-            axis_name = axis_labels[i] if i < len(axis_labels) else str(i)
-            self.axis_combobox.addItem(
-                f"{axis_name} (size {layer.data.shape[i]})", i
-            )
+        # layer axes map onto the viewer's last layer.ndim axes
+        labels = self.viewer.dims.axis_labels[-layer.ndim :]
+        for i, size in enumerate(layer.data.shape[: layer.ndim]):
+            self.axis_combobox.addItem(f"{labels[i]} (size {size})", i)
 
-    def _on_split(self):
-        idx = self.layer_combobox.currentIndex()
-        if idx < 0 or idx >= len(self.viewer.layers):
-            return
-        layer = self.viewer.layers[idx]
+    def _on_split(self) -> None:
+        layer = self._current_layer()
         axis = self.axis_combobox.currentData()
-        if axis is None:
+        if layer is None or axis is None:
             return
-        data = layer.data
-        base_name = layer.name
-        is_labels = isinstance(layer, labels.Labels)
-        scale = [s for i, s in enumerate(layer.scale) if i != axis]
-        translate = [t for i, t in enumerate(layer.translate) if i != axis]
-        kwargs = {"scale": scale, "translate": translate}
-        if not is_labels:
-            kwargs["contrast_limits"] = layer.contrast_limits
-            kwargs["colormap"] = layer.colormap.name
-            kwargs["blending"] = layer.blending
-        add_fn = self.viewer.add_labels if is_labels else self.viewer.add_image
-        for i in range(data.shape[axis]):
-            slicing = tuple(
-                slice(None) if a != axis else i for a in range(data.ndim)
+        if isinstance(layer, Image):
+            # napari's own splitter keeps the other layer properties
+            parts = stack_to_images(
+                layer,
+                axis,
+                colormap=[layer.colormap.name],
+                contrast_limits=layer.contrast_limits,
+                blending=layer.blending,
             )
-            add_fn(data[slicing], name=f"{base_name}_{i}", **kwargs)
+        elif isinstance(layer, Labels):
+            data, meta, _ = layer.as_layer_data_tuple()
+            for key in ("scale", "translate"):
+                meta[key] = [v for i, v in enumerate(meta[key]) if i != axis]
+            for key in ("rotate", "shear", "affine", "axis_labels", "units"):
+                meta.pop(key, None)
+            parts = [
+                Labels(np.take(data, i, axis=axis), **meta)
+                for i in range(data.shape[axis])
+            ]
+        else:
+            show_info(f"Cannot split {type(layer).__name__} layers")
+            return
+        for i, part in enumerate(parts):
+            part.name = f"{layer.name}_{i}"
+            self.viewer.add_layer(part)
         if self.remove_original_checkbox.isChecked():
             self.viewer.layers.remove(layer)
-
-
-if __name__ == "__main__":
-    import numpy as np
-
-    viewer = napari.Viewer()
-    widget = LayerAnnotationsWidget(viewer)
-    img1 = np.random.randint(0, 255, (10, 100))
-    img2 = np.random.randint(0, 255, (10, 100))
-    viewer.add_image(img1, scale=(1, 1))
-    viewer.add_image(img2, scale=(1, 1))
-    viewer.add_image(img1, scale=(1, 1))
-    viewer.window.add_dock_widget(widget, area="right")
-    napari.run()
